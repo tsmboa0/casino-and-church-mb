@@ -19,6 +19,8 @@ export const config = {
   privyKey: (env.PRIVY_VERIFICATION_KEY ?? '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqsFE40+g5Tte/euEoVPR7y5d5FHNbcSKg9vxZSs8dmtFJY8vEDf50hNE9lOke4btX5cEoEhzSI2/cBaZ7izQKg==\n-----END PUBLIC KEY-----').replace(/\\n/g, '\n'),
   sponsor: key('SPONSOR_KEY', 'sponsor'),
   keeper: key('KEEPER_KEY', 'keeper'),
+  /** the Church oracle: co-signs campaigns it has read, and claims it has seen */
+  oracle: key('ORACLE_KEY', 'oracle'),
   databaseUrl: env.DATABASE_URL ?? '',
   faucetLamports: BigInt(env.FAUCET_LAMPORTS ?? 50_000_000),        // 0.05 SOL
   accountsTotal: Number(env.ACCOUNTS_TOTAL ?? 3000),

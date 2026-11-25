@@ -16,9 +16,12 @@ use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at
 
 pub mod bets;
 pub mod blackjack;
+pub mod campaigns;
+pub mod church;
 pub mod constants;
 pub mod error;
 pub mod games;
+pub mod machines;
 pub mod market;
 pub mod money;
 pub mod state;
@@ -26,6 +29,7 @@ pub mod state;
 use bets::BetError;
 use constants::*;
 use error::RealmError;
+use church::ChurchError;
 use market::{MarketError, Tick};
 use money::MoneyError;
 use state::*;
@@ -78,6 +82,36 @@ impl From<MarketError> for RealmError {
             MarketError::Overflow => RealmError::Overflow,
         }
     }
+}
+impl From<ChurchError> for RealmError {
+    fn from(e: ChurchError) -> Self {
+        match e {
+            ChurchError::BadArgs => RealmError::BadArgs,
+            ChurchError::NoChips => RealmError::NoChips,
+            ChurchError::LuckLow => RealmError::LuckLow,
+            ChurchError::FaithLow => RealmError::FaithLow,
+            ChurchError::Cooldown => RealmError::Cooldown,
+            ChurchError::AlreadyClaimed => RealmError::AlreadyClaimed,
+            ChurchError::NotDone => RealmError::NotDone,
+            ChurchError::NotAllowed => RealmError::NotAllowed,
+            ChurchError::Closed => RealmError::CampaignClosed,
+            ChurchError::TreasuryLow => RealmError::TreasuryLow,
+            ChurchError::PlotTaken => RealmError::PlotTaken,
+            ChurchError::PlotGate => RealmError::PlotGate,
+            ChurchError::Reserve => RealmError::Reserve,
+            ChurchError::BoardFull => RealmError::BoardFull,
+            ChurchError::Busy => RealmError::BetPending,
+            ChurchError::BadName => RealmError::BadName,
+            ChurchError::BadWager => RealmError::BadWager,
+            ChurchError::MaxBet => RealmError::MaxBet,
+            ChurchError::NothingPending => RealmError::NothingPending,
+            ChurchError::TooEarly => RealmError::TooEarly,
+            ChurchError::Overflow => RealmError::Overflow,
+        }
+    }
+}
+fn ch<T>(r: church::R<T>) -> Result<T> {
+    r.map_err(|e| error!(RealmError::from(e)))
 }
 impl From<MoneyError> for RealmError {
     fn from(e: MoneyError) -> Self {
@@ -216,6 +250,28 @@ pub mod realm {
             }
         }
         require!(n > 0, RealmError::NothingPending);
+        Ok(())
+    }
+
+    // ================================================================ L1: Founders' Row and the Quest Board
+
+    pub fn init_plots(ctx: Context<InitPlots>) -> Result<()> {
+        ctx.accounts.plots.load_init()?.bump = ctx.bumps.plots;
+        Ok(())
+    }
+    pub fn init_board(ctx: Context<InitBoard>, index: u8) -> Result<()> {
+        require!(index < 2, RealmError::BadArgs);
+        let mut b = ctx.accounts.board.load_init()?;
+        b.index = index;
+        b.bump = ctx.bumps.board;
+        Ok(())
+    }
+    pub fn delegate_plots(ctx: Context<DelegatePlots>) -> Result<()> {
+        ctx.accounts.delegate_plots(&ctx.accounts.payer, &[SEED_PLOTS], DelegateConfig { validator: Some(ctx.accounts.config.er_validator), ..Default::default() })?;
+        Ok(())
+    }
+    pub fn delegate_board(ctx: Context<DelegateBoard>, index: u8) -> Result<()> {
+        ctx.accounts.delegate_board(&ctx.accounts.payer, &[SEED_BOARD, &[index]], DelegateConfig { validator: Some(ctx.accounts.config.er_validator), ..Default::default() })?;
         Ok(())
     }
 
@@ -393,7 +449,7 @@ pub mod realm {
             (seq, bets::caller_seed(&client_seed, &ctx.accounts.player.key().to_bytes(), seq))
         };
         let a = &ctx.accounts;
-        let ix = ask_oracle(a.signer.key(), a.oracle_queue.key(), a.player.key(), a.house.key(), instruction::SettleBet::DISCRIMINATOR, seed, seq.to_le_bytes().to_vec());
+        let ix = ask_oracle(a.signer.key(), a.oracle_queue.key(), &[a.player.key(), a.house.key()], instruction::SettleBet::DISCRIMINATOR, seed, seq.to_le_bytes().to_vec());
         ctx.accounts.invoke_signed_vrf(&ctx.accounts.signer.to_account_info(), &ix)?;
         Ok(())
     }
@@ -634,6 +690,169 @@ pub mod realm {
         Ok(())
     }
 
+    // ================================================================ rollup: the church
+
+    pub fn tithe(ctx: Context<Play>, chips: u64) -> Result<()> {
+        ctx.accounts.authorize()?;
+        let mut p = ctx.accounts.player.load_mut()?;
+        let mut h = ctx.accounts.house.load_mut()?;
+        touch(&mut p, &mut h, &ctx.accounts.purse)?;
+        let faith_milli = ch(church::tithe(&mut p, &mut h, chips, Clock::get()?.unix_timestamp))?;
+        emit!(Tithed { wallet: p.authority, lamports: chips * CHIP, faith_milli });
+        Ok(())
+    }
+    pub fn offer_luck(ctx: Context<Play>, luck_milli: u32) -> Result<()> {
+        ctx.accounts.authorize()?;
+        let mut p = ctx.accounts.player.load_mut()?;
+        let mut h = ctx.accounts.house.load_mut()?;
+        touch(&mut p, &mut h, &ctx.accounts.purse)?;
+        ch(church::offer_luck(&mut p, &h, luck_milli))?;
+        Ok(())
+    }
+    pub fn light_candle(ctx: Context<Play>) -> Result<()> {
+        ctx.accounts.authorize()?;
+        let mut p = ctx.accounts.player.load_mut()?;
+        let mut h = ctx.accounts.house.load_mut()?;
+        touch(&mut p, &mut h, &ctx.accounts.purse)?;
+        let faith_milli = ch(church::light_candle(&mut p, &h, Clock::get()?.unix_timestamp))?;
+        emit!(CandleLit { wallet: p.authority, faith_milli });
+        Ok(())
+    }
+    pub fn claim_quest(ctx: Context<Play>, bit: u8) -> Result<()> {
+        ctx.accounts.authorize()?;
+        let mut p = ctx.accounts.player.load_mut()?;
+        let mut h = ctx.accounts.house.load_mut()?;
+        touch(&mut p, &mut h, &ctx.accounts.purse)?;
+        let (free_chips, _, _) = ch(church::claim_quest(&mut p, &mut h, bit))?;
+        emit!(QuestClaimed { wallet: p.authority, bit, free_chips });
+        Ok(())
+    }
+
+    // ================================================================ rollup: Founders' Row
+
+    pub fn claim_plot(ctx: Context<Row>, plot: u8, name: String, skin: u8, bankroll_chips: u64) -> Result<()> {
+        let a = &ctx.accounts;
+        authorize(&a.signer.key(), &a.authority.key(), a.session_token.as_ref())?;
+        let (mut p, mut h, mut l) = (a.player.load_mut()?, a.house.load_mut()?, a.plots.load_mut()?);
+        touch(&mut p, &mut h, &a.purse)?;
+        let machine = ch(machines::claim_plot(&mut p, &mut h, &mut l, plot, &name, skin, bankroll_chips))?;
+        emit!(PlotClaimed { wallet: p.authority, plot, machine, bankroll: bankroll_chips * CHIP });
+        Ok(())
+    }
+    /// chips > 0 puts chips in, < 0 takes them out
+    pub fn fund_machine(ctx: Context<Row>, plot: u8, chips: i64) -> Result<()> {
+        let a = &ctx.accounts;
+        authorize(&a.signer.key(), &a.authority.key(), a.session_token.as_ref())?;
+        let (mut p, mut h, mut l) = (a.player.load_mut()?, a.house.load_mut()?, a.plots.load_mut()?);
+        touch(&mut p, &mut h, &a.purse)?;
+        ch(if chips >= 0 { machines::fund(&mut p, &mut h, &mut l, plot, chips as u64) } else { machines::withdraw(&mut p, &mut h, &mut l, plot, chips.unsigned_abs()) })
+    }
+    /// The main wallet only: a session key can play, but not give a machine away.
+    pub fn transfer_deed(ctx: Context<Row>, plot: u8, to: Pubkey) -> Result<()> {
+        let a = &ctx.accounts;
+        require_keys_eq!(a.signer.key(), a.authority.key(), RealmError::NotAllowed);
+        let (mut p, mut h, mut l) = (a.player.load_mut()?, a.house.load_mut()?, a.plots.load_mut()?);
+        touch(&mut p, &mut h, &a.purse)?;
+        ch(machines::transfer(&p, &mut l, plot, to))?;
+        emit!(DeedTransferred { from: p.authority, to, plot });
+        Ok(())
+    }
+    /// The owner, or the admin, takes a machine off its plot. The bankroll goes to the owner either way.
+    pub fn release_plot(ctx: Context<Row>, plot: u8) -> Result<()> {
+        let a = &ctx.accounts;
+        if a.signer.key() != a.config.admin { authorize(&a.signer.key(), &a.authority.key(), a.session_token.as_ref())?; }
+        let (mut p, mut h, mut l) = (a.player.load_mut()?, a.house.load_mut()?, a.plots.load_mut()?);
+        touch(&mut p, &mut h, &a.purse)?;
+        let lamports = ch(machines::release(&mut p, &mut h, &mut l, plot))?;
+        emit!(PlotReleased { wallet: p.authority, plot, lamports });
+        Ok(())
+    }
+    pub fn place_machine_bet(ctx: Context<PlaceMachineBet>, plot: u8, chips: u64, client_seed: [u8; 32]) -> Result<()> {
+        authorize(&ctx.accounts.signer.key(), &ctx.accounts.authority.key(), ctx.accounts.session_token.as_ref())?;
+        let now = Clock::get()?.unix_timestamp;
+        let seq = {
+            let a = &ctx.accounts;
+            let (mut p, mut h, mut l) = (a.player.load_mut()?, a.house.load_mut()?, a.plots.load_mut()?);
+            touch(&mut p, &mut h, &a.purse)?;
+            let seq = ch(machines::place(&mut p, &mut h, &mut l, plot, chips, client_seed, now))?;
+            emit!(BetPlaced { wallet: p.authority, seq, game: games::SLOTS, pick: 0, wager: chips * CHIP });
+            seq
+        };
+        let a = &ctx.accounts;
+        let seed = bets::caller_seed(&client_seed, &a.player.key().to_bytes(), seq);
+        let ix = ask_oracle(a.signer.key(), a.oracle_queue.key(), &[a.player.key(), a.house.key(), a.plots.key()], instruction::SettleMachineBet::DISCRIMINATOR, seed, seq.to_le_bytes().to_vec());
+        ctx.accounts.invoke_signed_vrf(&ctx.accounts.signer.to_account_info(), &ix)?;
+        Ok(())
+    }
+    pub fn settle_machine_bet(ctx: Context<SettleMachineBet>, randomness: [u8; 32], seq: u64) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let a = &ctx.accounts;
+        let (mut p, mut h, mut l) = (a.player.load_mut()?, a.house.load_mut()?, a.plots.load_mut()?);
+        let (per_min, window) = (h.params.decay_per_min_milli, h.params.max_decay_window_s);
+        money::decay(&mut p, now, per_min, window);
+        if let Some(s) = machines::settle(&mut p, &mut h, &mut l, &randomness, seq, now) {
+            emit!(BetSettled { wallet: p.authority, seq, game: games::SLOTS, pick: 0, wager: s.wager, payout: s.payout, blessing: 0, luck_gain_milli: 0, outcome: s.outcome, jackpot: false, randomness });
+        }
+        Ok(())
+    }
+    pub fn refund_machine_bet(ctx: Context<RefundMachine>) -> Result<()> {
+        let a = &ctx.accounts;
+        let (mut p, mut h, mut l) = (a.player.load_mut()?, a.house.load_mut()?, a.plots.load_mut()?);
+        let (seq, wager) = ch(machines::refund(&mut p, &mut h, &mut l, Clock::get()?.unix_timestamp))?;
+        emit!(BetRefunded { wallet: p.authority, seq, wager });
+        Ok(())
+    }
+
+    // ================================================================ rollup: campaigns
+
+    /// The Church oracle signs the same transaction: it has read the wording and the link.
+    pub fn create_campaign(ctx: Context<CreateCampaign>, args: CampaignArgs) -> Result<()> {
+        let a = &ctx.accounts;
+        authorize(&a.signer.key(), &a.authority.key(), a.session_token.as_ref())?;
+        let (mut p, mut h, mut b) = (a.player.load_mut()?, a.house.load_mut()?, a.board.load_mut()?);
+        touch(&mut p, &mut h, &a.purse)?;
+        let owns = a.plots.load()?.machines.iter().any(|m| m.id != 0 && m.id == args.machine_id && m.owner == p.authority);
+        let id = ch(campaigns::create(&mut p, &mut h, &mut b, &args.view(), owns, Clock::get()?.unix_timestamp))?;
+        emit!(CampaignOpened { id, wallet: p.authority });
+        Ok(())
+    }
+    /// The Church's own, paid by the treasury.
+    pub fn seed_campaign(ctx: Context<SeedCampaign>, args: CampaignArgs) -> Result<()> {
+        let a = &ctx.accounts;
+        let (mut h, mut b) = (a.house.load_mut()?, a.board.load_mut()?);
+        let id = ch(campaigns::seed(a.admin.key(), &mut h, &mut b, &args.view(), Clock::get()?.unix_timestamp))?;
+        emit!(CampaignOpened { id, wallet: a.admin.key() });
+        Ok(())
+    }
+    /// Machine campaigns are proven by the player's own play counts; the others need the Church oracle's signature.
+    pub fn claim_campaign(ctx: Context<ClaimCampaign>, id: u32) -> Result<()> {
+        let a = &ctx.accounts;
+        authorize(&a.signer.key(), &a.authority.key(), a.session_token.as_ref())?;
+        let attested = a.oracle.as_ref().is_some_and(|o| o.key() == a.config.church_oracle);
+        let (mut p, mut h, mut b) = (a.player.load_mut()?, a.house.load_mut()?, a.board.load_mut()?);
+        touch(&mut p, &mut h, &a.purse)?;
+        let (chips, faith_milli) = ch(campaigns::claim(&mut p, &mut h, &mut b, id, attested, Clock::get()?.unix_timestamp))?;
+        emit!(CampaignClaimed { id, wallet: p.authority, chips, faith_milli });
+        Ok(())
+    }
+    /// Its creator or the admin. What is left is collected separately.
+    pub fn close_campaign(ctx: Context<CloseCampaign>, id: u32) -> Result<()> {
+        let a = &ctx.accounts;
+        let admin = a.signer.key() == a.config.admin;
+        if !admin { authorize(&a.signer.key(), &a.authority.key(), a.session_token.as_ref())?; }
+        ch(campaigns::close(&mut *a.board.load_mut()?, id, &a.authority.key(), admin))
+    }
+    /// A closed campaign's unspent rewards, back to whoever paid. Anyone may call it.
+    pub fn collect_campaign(ctx: Context<CollectCampaign>, id: u32) -> Result<()> {
+        let a = &ctx.accounts;
+        let (mut h, mut b) = (a.house.load_mut()?, a.board.load_mut()?);
+        match &a.player {
+            Some(l) => { let mut p = l.load_mut()?; ch(campaigns::collect(Some(&mut p), &mut h, &mut b, id))? }
+            None => ch(campaigns::collect(None, &mut h, &mut b, id))?,
+        };
+        Ok(())
+    }
+
     // ================================================================ rollup: the player's own things
 
     pub fn set_profile(ctx: Context<Play>, name: String, avatar: String) -> Result<()> {
@@ -702,7 +921,7 @@ fn touch(p: &mut Player, h: &mut House, purse: &Purse) -> Result<()> {
 }
 
 /// The request every bet makes. The answer can only come back to `callback`, with this player and the house.
-fn ask_oracle(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pubkey, callback: &[u8], caller_seed: [u8; 32], args: Vec<u8>) -> Instruction {
+fn ask_oracle(payer: Pubkey, oracle_queue: Pubkey, accounts: &[Pubkey], callback: &[u8], caller_seed: [u8; 32], args: Vec<u8>) -> Instruction {
     let meta = |k: Pubkey| SerializableAccountMeta { pubkey: k, is_signer: false, is_writable: true };
     create_request_randomness_ix_const(
         RequestRandomnessParams {
@@ -711,7 +930,7 @@ fn ask_oracle(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pubkey
             callback_program_id: crate::ID,
             callback_discriminator: callback.to_vec(),
             caller_seed,
-            accounts_metas: Some(vec![meta(player), meta(house)]),
+            accounts_metas: Some(accounts.iter().map(|k| meta(*k)).collect()),
             callback_args: Some(args),
             ..Default::default()
         },
@@ -723,7 +942,7 @@ fn ask_for_cards(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pub
     seed[8] ^= step; // every step of a hand asks with a different seed
     let mut args = seq.to_le_bytes().to_vec();
     args.push(step);
-    ask_oracle(payer, oracle_queue, player, house, instruction::BjSettle::DISCRIMINATOR, seed, args)
+    ask_oracle(payer, oracle_queue, &[player, house], instruction::BjSettle::DISCRIMINATOR, seed, args)
 }
 
 /// what a tick did, as events and as plain text for explorers
@@ -846,6 +1065,39 @@ pub struct BetPlaced { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick:
 pub struct BetSettled { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick: u8, pub wager: u64, pub payout: u64, pub blessing: u64, pub luck_gain_milli: u32, pub outcome: [u8; 4], pub jackpot: bool, pub randomness: [u8; 32] }
 #[event]
 pub struct HandStep { pub wallet: Pubkey, pub seq: u64, pub step: u8, pub action: u8, pub player: [u8; 12], pub n_player: u8, pub dealer: [u8; 12], pub n_dealer: u8, pub randomness: [u8; 32] }
+#[derive(AnchorSerialize, AnchorDeserialize)]
+pub struct CampaignArgs {
+    pub kind: u8,
+    pub title: String,
+    pub url: String,
+    pub machine_id: u32,
+    pub goal: u32,
+    pub reward_chips: u32,
+    pub reward_faith_milli: u32,
+    pub max_claims: u32,
+}
+impl CampaignArgs {
+    fn view(&self) -> campaigns::New<'_> {
+        campaigns::New { kind: self.kind, title: &self.title, url: &self.url, machine_id: self.machine_id, goal: self.goal, reward_chips: self.reward_chips, reward_faith_milli: self.reward_faith_milli, max_claims: self.max_claims }
+    }
+}
+
+#[event]
+pub struct Tithed { pub wallet: Pubkey, pub lamports: u64, pub faith_milli: u32 }
+#[event]
+pub struct CandleLit { pub wallet: Pubkey, pub faith_milli: u32 }
+#[event]
+pub struct QuestClaimed { pub wallet: Pubkey, pub bit: u8, pub free_chips: u64 }
+#[event]
+pub struct PlotClaimed { pub wallet: Pubkey, pub plot: u8, pub machine: u32, pub bankroll: u64 }
+#[event]
+pub struct DeedTransferred { pub from: Pubkey, pub to: Pubkey, pub plot: u8 }
+#[event]
+pub struct PlotReleased { pub wallet: Pubkey, pub plot: u8, pub lamports: u64 }
+#[event]
+pub struct CampaignOpened { pub id: u32, pub wallet: Pubkey }
+#[event]
+pub struct CampaignClaimed { pub id: u32, pub wallet: Pubkey, pub chips: u64, pub faith_milli: u32 }
 #[event]
 pub struct MarketBetPlaced { pub wallet: Pubkey, pub seq: u64, pub epoch: u64, pub side: u8, pub wager: u64 }
 #[event]
@@ -1256,4 +1508,191 @@ pub struct MarketCheckpoint<'info> {
     pub config: Box<Account<'info, Config>>,
     #[account(mut, seeds = [SEED_MARKET], bump)]
     pub market: AccountLoader<'info, Market>,
+}
+
+#[derive(Accounts)]
+pub struct InitPlots<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump, has_one = admin @ RealmError::NotAllowed)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(init, payer = admin, space = Plots::SPACE, seeds = [SEED_PLOTS], bump)]
+    pub plots: AccountLoader<'info, Plots>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(index: u8)]
+pub struct InitBoard<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump, has_one = admin @ RealmError::NotAllowed)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(init, payer = admin, space = Board::SPACE, seeds = [SEED_BOARD, &[index]], bump)]
+    pub board: AccountLoader<'info, Board>,
+    pub system_program: Program<'info, System>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegatePlots<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    /// CHECK: our PDA; the delegation program takes it over
+    #[account(mut, del, seeds = [SEED_PLOTS], bump)]
+    pub plots: UncheckedAccount<'info>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+#[instruction(index: u8)]
+pub struct DelegateBoard<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    /// CHECK: our PDA; the delegation program takes it over
+    #[account(mut, del, seeds = [SEED_BOARD, &[index]], bump)]
+    pub board: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct Row<'info> {
+    pub signer: Signer<'info>,
+    /// CHECK: whose player this is; proven by `authorize`
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(seeds = [SEED_PURSE, authority.key().as_ref()], bump = purse.bump)]
+    pub purse: Account<'info, Purse>,
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
+    #[account(mut, seeds = [SEED_PLOTS], bump)]
+    pub plots: AccountLoader<'info, Plots>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+}
+
+#[vrf]
+#[derive(Accounts)]
+pub struct PlaceMachineBet<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    /// CHECK: whose player this is; proven by `authorize`
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(seeds = [SEED_PURSE, authority.key().as_ref()], bump = purse.bump)]
+    pub purse: Account<'info, Purse>,
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
+    #[account(mut, seeds = [SEED_PLOTS], bump)]
+    pub plots: AccountLoader<'info, Plots>,
+    /// CHECK: the rollup's VRF queue, and no other
+    #[account(mut, address = DEFAULT_EPHEMERAL_QUEUE)]
+    pub oracle_queue: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SettleMachineBet<'info> {
+    /// only the VRF program, answering a request this program made, can sign for this
+    #[account(address = VRF_IDENTITY @ RealmError::NotAllowed)]
+    pub vrf_program_identity: Signer<'info>,
+    #[account(mut)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut)]
+    pub house: AccountLoader<'info, House>,
+    #[account(mut)]
+    pub plots: AccountLoader<'info, Plots>,
+}
+
+#[derive(Accounts)]
+pub struct RefundMachine<'info> {
+    /// CHECK: only seeds the PDA
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(mut, seeds = [SEED_PLOTS], bump)]
+    pub plots: AccountLoader<'info, Plots>,
+}
+
+#[derive(Accounts)]
+pub struct CreateCampaign<'info> {
+    pub signer: Signer<'info>,
+    /// CHECK: whose player this is; proven by `authorize`
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(seeds = [SEED_PURSE, authority.key().as_ref()], bump = purse.bump)]
+    pub purse: Account<'info, Purse>,
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(mut, seeds = [SEED_BOARD, &[board.load()?.index]], bump)]
+    pub board: AccountLoader<'info, Board>,
+    #[account(seeds = [SEED_PLOTS], bump)]
+    pub plots: AccountLoader<'info, Plots>,
+    #[account(address = config.church_oracle @ RealmError::NotAllowed)]
+    pub oracle: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SeedCampaign<'info> {
+    pub admin: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump, has_one = admin @ RealmError::NotAllowed)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(mut, seeds = [SEED_BOARD, &[board.load()?.index]], bump)]
+    pub board: AccountLoader<'info, Board>,
+}
+
+#[derive(Accounts)]
+pub struct ClaimCampaign<'info> {
+    pub signer: Signer<'info>,
+    /// CHECK: whose player this is; proven by `authorize`
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(seeds = [SEED_PURSE, authority.key().as_ref()], bump = purse.bump)]
+    pub purse: Account<'info, Purse>,
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(mut, seeds = [SEED_BOARD, &[board.load()?.index]], bump)]
+    pub board: AccountLoader<'info, Board>,
+    pub oracle: Option<Signer<'info>>,
+}
+
+#[derive(Accounts)]
+pub struct CloseCampaign<'info> {
+    pub signer: Signer<'info>,
+    /// CHECK: the creator; proven by `authorize` unless the admin signs
+    pub authority: UncheckedAccount<'info>,
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(mut, seeds = [SEED_BOARD, &[board.load()?.index]], bump)]
+    pub board: AccountLoader<'info, Board>,
+}
+
+#[derive(Accounts)]
+pub struct CollectCampaign<'info> {
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(mut, seeds = [SEED_BOARD, &[board.load()?.index]], bump)]
+    pub board: AccountLoader<'info, Board>,
+    /// the creator's, unless the treasury paid. Its authority is checked against the campaign
+    #[account(mut)]
+    pub player: Option<AccountLoader<'info, Player>>,
 }

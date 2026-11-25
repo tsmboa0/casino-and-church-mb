@@ -23,7 +23,7 @@ export function campaignCost(c: Pick<NewCampaign, 'reward_chips' | 'max_claims'>
 }
 
 /** links a campaign may point at: well-known, read-only sites (no wallet-connect pages, no shorteners) */
-const ALLOWED_HOSTS = ['x.com', 'twitter.com', 'github.com', 'near.org', 'docs.near.org', 'near.ai', 'docs.near.ai', 'nearblocks.io',
+const ALLOWED_HOSTS = ['x.com', 'twitter.com', 'github.com', 'solana.com', 'magicblock.xyz', 'magicblock.gg', 'colosseum.com', 'near.org', 'docs.near.org', 'near.ai', 'docs.near.ai', 'nearblocks.io',
   'testnet.nearblocks.io', 'medium.com', 'youtube.com', 'www.youtube.com', 'discord.gg', 't.me', 'mirror.xyz', 'dev.to', 'substack.com'];
 const RISKY = /(connect|wallet|claim|airdrop|seed|private.?key|mnemonic|verify.?account|bonus|giveaway|free.?near|login|signin)/i;
 

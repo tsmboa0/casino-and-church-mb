@@ -27,6 +27,7 @@ export interface BetResult {
 /** what a player needs to check a bet: its number and the randomness that settled it */
 export interface BetProof { seq: string; randomness: string; clientSeed: string; placeTx: string }
 export interface BetCheck { /** how many random numbers the bet used (a blackjack hand uses one per action) */ answers?: number; found: boolean; tx: string | null; randomness: string; fromVrf: boolean; recomputed: string; recorded: string; matches: boolean }
+/** the wheels pay bonus chips; the jackpot is real */
 export interface WheelResult { prize: number | 'JACKPOT'; chips: number; proof?: BetProof }
 /** a blackjack hand as the panel draws it (chain: built from get_blackjack + the settled result) */
 export interface BjState {
@@ -39,6 +40,8 @@ export type AgentId = 'fortuna' | 'nakamoto';
 export interface CampaignRow {
   id: number; kind: number; creator: string; title: string; url: string; machineId: number; goal: number;
   rewardChips: number; rewardFaith: number; maxClaims: number; claims: number; active: boolean; claimed: boolean; progress: number; mine: boolean;
+  /** the Church pays: bonus chips. `refund`: chips left in a closed one */
+  free?: boolean; refund?: number;
 }
 export interface AgentProof { model: string; chatId: string; signedText: string; signature: string; signingAddress: string;
   signatureKind: 'provider_tee' | 'gateway'; requestB64: string; responseB64: string; attestedSigner: string; attestationAt: number; txHash?: string }
@@ -101,6 +104,10 @@ export interface Backend {
   claimPlot(id: number, name: string, skin: string, bankroll: number): Promise<Plot>;
   fundMachine(id: number, chips: number): Promise<void>;
   withdrawMachine(id: number, chips: number): Promise<void>;
+  /** OPTIONAL: take your machine off the plot; its bankroll comes back */
+  releasePlot?(id: number): Promise<void>;
+  /** OPTIONAL: read the plots again (bankrolls change with every spin) */
+  plotsNow?(): Promise<void>;
   /** OPTIONAL blackjack (contract: place_bet("blackjack") then blackjack_act). Resolves once the opening cards are shown
    *  (stage 'player'), or 'done' straight away on a natural. */
   blackjackDeal?(wager: number): Promise<BjState>;
@@ -195,18 +202,20 @@ class MockBackend implements Backend {
     const e = store.eco, s = store.stats;
     if (r.game === 'blackjack') fail('not_allowed', 'The blackjack table is closed in the demo.');
     if (!PARAMS.quoteBets.includes(r.wager) && r.game !== 'roulette') fail('bad_wager', 'Pick one of the listed bets.');
-    if (r.wager < 1 || e.chips < r.wager) fail('no_chips', 'Not enough chips. Visit the Cashier.');
+    if (r.wager < 1 || e.chips + e.bonus < r.wager) fail('no_chips', 'Not enough chips. Visit the Cashier.');
+    const free = Math.min(e.bonus, r.wager), real = r.wager - free;
     const draws = randomDraws(), betId = s.nextBet++;
     let base = 0, outcome: BetResult['outcome'] = {};
     if (r.game === 'slots') { const o = resolveSlots(draws); base = r.wager * o.payX; outcome = { reels: o.reels }; s.spins++; }
-    else if (r.game === 'coinflip') { const side = resolveCoin(draws); outcome = { side }; if ((r.pick === 0 ? 'H' : 'T') === side) base = Math.floor((r.wager * COIN_PAY_BPS) / 10000); s.flips++; }
-    else if (r.game === 'dice') { const o = resolveDice(draws, r.pick ?? 0); base = Math.floor((r.wager * o.payBps) / 10000); outcome = { dice: o.dice }; s.dice++; }
+    else if (r.game === 'coinflip') { const side = resolveCoin(draws); outcome = { side }; if ((r.pick === 0 ? 'H' : 'T') === side) base = (r.wager * COIN_PAY_BPS) / 10000; s.flips++; }
+    else if (r.game === 'dice') { const o = resolveDice(draws, r.pick ?? 0); base = (r.wager * o.payBps) / 10000; outcome = { dice: o.dice }; s.dice++; }
     else { const o = resolveRoulette(draws, r.pick ?? 100); base = r.wager * o.payX; outcome = { n: o.n, color: o.color }; s.roulette++; }
-    const blessed = base > 0 ? withBlessing(base, e.faith) : 0;
-    const luckGain = luckForBet(r.wager) * this.boost('casino');
+    // a returned stake is not a win: the free part comes back free
+    const back = base > r.wager ? 0 : Math.min(base, free), blessed = base - back > 0 ? back + withBlessing(base - back, e.faith) : base;
+    const luckGain = luckForBet(real, r.game) * this.boost('casino');
     s.wagered += r.wager;
     s.pool += (r.wager * PARAMS.treasuryBpsOfWager) / 10000; s.jackpot += (r.wager * PARAMS.jackpotBpsOfWager) / 10000;
-    store.change({ chips: -r.wager + blessed, luck: luckGain });
+    store.change({ chips: -real + blessed - back, bonus: back - free, luck: luckGain });
     const o = outcome, detail = o.reels ? o.reels.map(x => x.toUpperCase()).join(' ') : o.side ? (o.side === 'H' ? 'HEADS' : 'TAILS') : o.dice ? `${o.dice[0]} + ${o.dice[1]} = ${o.dice[0] + o.dice[1]}` : `${o.n} ${String(o.color).toUpperCase()}`;
     this.log(r.game, r.wager, blessed, detail);
     await sleep(350);                                               // stands in for commit -> reveal latency
@@ -216,7 +225,7 @@ class MockBackend implements Backend {
   async spinWheel(): Promise<WheelResult> {
     this.settle(); if (store.eco.luck < 100) fail('luck', 'Your LUCK must be full (100).');
     const prize = pickWeighted(WHEEL_PRIZES, randomDraws()[0]);
-    store.change({ luck: -100, chips: prize }); this.log('wheel', 0, prize, `WHEEL ${prize}`); await sleep(250); return { prize, chips: prize };
+    store.change({ luck: -100, bonus: prize }); this.log('wheel', 0, prize, `WHEEL ${prize}`); await sleep(250); return { prize, chips: prize };
   }
   async spinHarmony(): Promise<WheelResult> {
     this.settle(); const e = store.eco, s = store.stats;
@@ -226,7 +235,7 @@ class MockBackend implements Backend {
     const prize = pickWeighted(HARMONY_PRIZES, randomDraws()[0]);
     const chips = prize === 'JACKPOT' ? Math.floor(s.jackpot) : prize;
     if (prize === 'JACKPOT') s.jackpot -= chips;
-    s.harmonyAt = Date.now(); store.change({ luck: -PARAMS.harmonyCostMilli / 1000, faith: -PARAMS.harmonyCostMilli / 1000, chips });
+    s.harmonyAt = Date.now(); store.change({ luck: -PARAMS.harmonyCostMilli / 1000, faith: -PARAMS.harmonyCostMilli / 1000, ...(prize === 'JACKPOT' ? { chips } : { bonus: chips }) });
     this.log('harmony', 0, chips, prize === 'JACKPOT' ? 'JACKPOT' : `HARMONY ${chips}`);
     await sleep(250); return { prize, chips };
   }
@@ -249,7 +258,7 @@ class MockBackend implements Backend {
     if (store.stats.claimed[id]) fail('claimed', 'Already claimed.');
     if (store.stats[q.counter] < q.goal) fail('progress', 'Not finished yet.');
     store.stats.claimed[id] = true;
-    store.change({ chips: q.reward.chips ?? 0, luck: q.reward.luck ?? 0 }); if (q.reward.faith) this.faith(q.reward.faith);
+    store.change({ bonus: q.reward.chips ?? 0, luck: q.reward.luck ?? 0 }); if (q.reward.faith) this.faith(q.reward.faith);
   }
   async deposit(sol: number) {
     if (sol <= 0 || store.eco.sol < sol) fail('no_sol', 'Not enough test SOL. Use the faucet.');
@@ -285,7 +294,7 @@ class MockBackend implements Backend {
     const r = blackjackPayout(h.player, h.dealer, h.original, h.stake);
     const paid = r.label === 'win' || r.label === 'natural' ? withBlessing(r.pay, store.eco.faith) : r.pay;
     const s = store.stats; s.wagered += h.stake; s.pool += (h.stake * PARAMS.treasuryBpsOfWager) / 10000; s.jackpot += (h.stake * PARAMS.jackpotBpsOfWager) / 10000;
-    store.change({ chips: paid, luck: luckForBet(h.stake) });
+    store.change({ chips: paid, luck: luckForBet(h.stake, 'blackjack') });
     this.log('blackjack', h.stake, paid, `${h.player.map(cardName).join(' ')} v ${h.dealer.map(cardName).join(' ')}`);
     const v = this.bjView({ label: r.label, payout: paid, blessing: paid - r.pay }); this.bj = null; return v;
   }

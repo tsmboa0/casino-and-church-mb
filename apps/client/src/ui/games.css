@@ -754,3 +754,9 @@
 .pr-row.head { position: sticky; top: 0; background: #14241c; font-family: var(--f-cap); font-size: 8px; letter-spacing: .1em; color: #ffe58a; }
 .pr-row small { opacity: .6; } .pr-row.up b { color: #3dffa0; } .pr-row.down b { color: #ff7b92; } .pr-row.tie b { color: #ffd24a; } .pr-row.void b { opacity: .6; } .pr-row .txl { margin: 0 4px 0 0; padding: 0; border: 0; background: none; box-shadow: none; white-space: nowrap; font-size: 9px; }
 @media (max-width: 760px) { .pr-row { grid-template-columns: 70px 62px 1fr 34px 38px 92px; font-size: 10.5px; gap: 5px; } .pr-row small { display: none; } }
+
+/* free chips */
+.g-lcd em { font-style: normal; font-family: var(--f-cap); font-size: 7px; letter-spacing: .08em; color: #8af0a4; line-height: 1.2; }
+.cs-bonus { font-size: 11px; color: #8af0a4; text-align: center; min-height: 14px; }
+.cs-bonus { grid-column: 1 / -1; min-height: 0; margin: -4px 0; } .cs-bonus:empty { display: none; }
+@media (max-height: 430px) { .pl-side > .skin.sel { display: none; } }

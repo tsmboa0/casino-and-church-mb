@@ -11,7 +11,7 @@
 use crate::bets::{add_luck, bps, luck_award, record, take_blessing, JACKPOT_BPS, TREASURY_BPS};
 use crate::constants::CHIP;
 use crate::games::{blessing_bps, MARKET};
-use crate::money::vault_free;
+use crate::money::{pay_bet, take_stake, vault_free};
 use crate::state::{BtcSlot, House, LiveRound, Market, Player, RoundRec, ARCHIVE_ROUNDS, RING};
 
 pub const UP: u8 = 1;
@@ -148,16 +148,15 @@ pub fn bet(p: &mut Player, h: &mut House, m: &mut Market, epoch: u64, side: u8, 
     if p.btc.iter().any(|s| s.state != 0 && s.epoch == epoch) { return Err(MarketError::AlreadyBet); }
     let free = p.btc.iter().position(|s| s.state == 0).ok_or(MarketError::SlotsFull)?;
     let wager = chips.checked_mul(CHIP).ok_or(MarketError::Overflow)?;
-    if p.chips < wager { return Err(MarketError::NoChips); }
+    if p.chips.saturating_add(p.bonus / CHIP * CHIP) < wager { return Err(MarketError::NoChips); }
     let payout_bps = m.payout_bps as u16;
     let hold = hold_of(wager, payout_bps);
-    if h.vault.checked_add(wager).ok_or(MarketError::Overflow)? < h.reserved.checked_add(hold).ok_or(MarketError::Overflow)? { return Err(MarketError::VaultLow); }
-    p.chips -= wager;
-    h.chips_outstanding -= wager;
-    h.vault += wager;
+    let real = wager - (p.bonus / CHIP).min(chips) * CHIP;
+    if h.vault.checked_add(real).ok_or(MarketError::Overflow)? < h.reserved.checked_add(hold).ok_or(MarketError::Overflow)? { return Err(MarketError::VaultLow); }
+    let bonus_chips = take_stake(p, h, wager).ok_or(MarketError::NoChips)?;
     h.reserved += hold;
     p.bet_seq += 1;
-    p.btc[free] = BtcSlot { epoch, wager, seq: p.bet_seq, payout_bps, blessing_bps: blessing_bps(p.faith_milli), side, state: 1, _pad: [0; 2] };
+    p.btc[free] = BtcSlot { epoch, wager, seq: p.bet_seq, payout_bps, blessing_bps: blessing_bps(p.faith_milli), side, state: 1, bonus_chips, _pad: 0 };
     if side == UP { m.open.up += wager } else { m.open.down += wager }
     m.open.bets += 1;
     Ok(p.bet_seq)
@@ -200,23 +199,24 @@ pub fn claim(p: &mut Player, h: &mut House, m: &Market, now: i64) -> Vec<Claimed
         let hold = hold_of(s.wager, s.payout_bps);
         h.reserved = h.reserved.saturating_sub(hold);
         let (won, back) = (outcome == s.side, outcome == TIE || outcome == VOID);
-        let pay = if won { hold } else if back { s.wager } else { 0 }.min(h.vault);
-        h.vault -= pay;
-        let blessing = if won { take_blessing(h, pay, s.blessing_bps, now) } else { 0 };
+        let free = u64::from(s.bonus_chips);
+        let real_stake = s.wager.saturating_sub(free * CHIP);
+        let (total, real) = pay_bet(p, h, s.wager, free, if won { hold } else if back { s.wager } else { 0 });
+        let blessing = if won { take_blessing(h, real, s.blessing_bps, now) } else { 0 };
         if !won && !back {
-            let t = bps(s.wager, TREASURY_BPS).min(h.vault);
+            let t = bps(real_stake, TREASURY_BPS).min(h.vault);
             h.vault -= t;
             h.treasury += t;
-            let j = bps(s.wager, JACKPOT_BPS).min(h.vault);
+            let j = bps(real_stake, JACKPOT_BPS).min(h.vault);
             h.vault -= j;
             h.jackpot += j;
         }
-        let payout = pay + blessing;
-        p.chips += payout;
-        h.chips_outstanding += payout;
+        p.chips += blessing;
+        h.chips_outstanding += blessing;
+        let payout = total + blessing;
         let luck = if back { 0 } else {
             p.wagered = p.wagered.saturating_add(s.wager);
-            add_luck(p, luck_award(h, s.wager / CHIP, now))
+            add_luck(p, luck_award(h, MARKET, real_stake, now))
         };
         let e = (s.epoch as u16).to_le_bytes();
         record(p, s.seq, s.wager, payout, now, luck, [s.side, outcome, e[0], e[1]], blessing, MARKET, 0);
@@ -435,6 +435,8 @@ mod tests {
                 assert!(h.reserved <= h.vault, "seed {seed}");
                 balanced(&h);
                 assert_eq!(ps.iter().map(|p| p.chips).sum::<u64>(), h.chips_outstanding);
+                assert_eq!(ps.iter().map(|p| p.bonus).sum::<u64>(), h.bonus_outstanding);
+                if next() % 11 == 0 { crate::money::grant_bonus(&mut ps[k], &mut h, next() % 20 * CHIP).unwrap(); }
                 assert!(m.open.up + m.open.down <= 80 * CHIP);
             }
             stop(&mut m, now);

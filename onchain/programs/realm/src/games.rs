@@ -1,5 +1,5 @@
 //! Pure game tables: the same numbers as the NEAR contract and `rules.ts`, checked by the shared test vectors.
-//! Payouts are floored to whole chips (house side).
+//! Payouts are exact: 1.94x of 10 chips is 19.4.
 
 use crate::constants::CHIP;
 
@@ -16,7 +16,8 @@ pub const MARKET: u8 = 7;
 const SLOT_W: [u32; 5] = [4, 8, 14, 24, 50];
 const SLOT_TRIPLE: [u64; 5] = [100, 40, 15, 8, 3];
 pub const WHEEL_PRIZES: [(u32, u32); 6] = [(10, 30), (25, 30), (50, 20), (100, 15), (250, 4), (500, 1)];
-pub const HARMONY_PRIZES: [(u32, u32); 4] = [(150, 40), (300, 30), (600, 20), (1500, 9)];
+/// free chips. Small on purpose: 50 LUCK is worth about 31 chips of house edge (the test below)
+pub const HARMONY_PRIZES: [(u32, u32); 4] = [(10, 40), (20, 30), (40, 20), (100, 9)];
 const HARMONY_JACKPOT_AT: u32 = 99;
 const RED: [u8; 18] = [1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36];
 pub const COIN_PAY_BPS: u64 = 19_400;
@@ -71,13 +72,15 @@ pub fn max_payout(game: u8, wager: u64) -> u64 {
     let chips = wager / CHIP;
     match game {
         SLOTS => chips * 100 * CHIP,
-        COIN => chips * COIN_PAY_BPS / 10_000 * CHIP,
-        DICE => chips * DICE_SEVEN_BPS / 10_000 * CHIP,
+        COIN => times(wager, COIN_PAY_BPS),
+        DICE => times(wager, DICE_SEVEN_BPS),
         ROULETTE => chips * 36 * CHIP,
-        WHEEL => 500 * CHIP,
-        HARMONY => 1_500 * CHIP,
+        // the wheels pay free chips (and the jackpot its own pool): nothing to hold
         _ => 0,
     }
+}
+fn times(wager: u64, bps: u64) -> u64 {
+    (u128::from(wager) * u128::from(bps) / 10_000) as u64
 }
 fn weighted(draw: u32, table: &[(u32, u32)]) -> usize {
     let r = mul_shift(draw, 100);
@@ -111,7 +114,7 @@ pub fn resolve(game: u8, d: &[u32; 8], pick: u8, wager: u64) -> Resolved {
         }
         COIN => {
             let side = mul_shift(d[0], 2) as u8;
-            Resolved { base: if side == pick { chips * COIN_PAY_BPS / 10_000 * CHIP } else { 0 }, outcome: [side, 0, 0, 0], jackpot: false }
+            Resolved { base: if side == pick { times(wager, COIN_PAY_BPS) } else { 0 }, outcome: [side, 0, 0, 0], jackpot: false }
         }
         DICE => {
             let (a, b) = (mul_shift(d[0], 6) + 1, mul_shift(d[1], 6) + 1);
@@ -128,7 +131,7 @@ pub fn resolve(game: u8, d: &[u32; 8], pick: u8, wager: u64) -> Resolved {
                 },
                 _ => 0,
             };
-            Resolved { base: chips * bps / 10_000 * CHIP, outcome: [a as u8, b as u8, 0, 0], jackpot: false }
+            Resolved { base: times(wager, bps), outcome: [a as u8, b as u8, 0, 0], jackpot: false }
         }
         ROULETTE => {
             let n = mul_shift(d[0], 37) as u8;
@@ -194,7 +197,7 @@ mod tests {
             assert_eq!((u64::from(r[0]), ["green", "red", "black"][r[1] as usize]), (c["roulette_n"].as_u64().unwrap(), c["roulette_color"].as_str().unwrap()));
             assert_eq!(resolve(WHEEL, &d, 0, 0).base, c["wheel"].as_u64().unwrap() * CHIP);
             let hm = resolve(HARMONY, &d, 0, 0);
-            if c["harmony"] == "JACKPOT" { assert!(hm.jackpot); } else { assert_eq!(hm.base, c["harmony"].as_u64().unwrap() * CHIP); }
+            if c["harmony"] == "JACKPOT" { assert!(hm.jackpot); } else { let i = [150, 300, 600, 1500].iter().position(|v| *v == c["harmony"].as_u64().unwrap()).unwrap(); assert_eq!(hm.base, u64::from(HARMONY_PRIZES[i].0) * CHIP); } // the vectors hold the NEAR prizes: same slice, smaller prize
         }
     }
 
@@ -219,5 +222,22 @@ mod tests {
         let mut back = 0u64;
         for a in 0..100 { for b in 0..100 { for c in 0..100 { let r = resolve(SLOTS, &[at(a, 100), at(b, 100), at(c, 100), 0, 0, 0, 0, 0], 0, CHIP); assert!(r.base <= max_payout(SLOTS, CHIP)); back += r.base / CHIP; } } }
         assert!((900_000..970_000).contains(&back), "slots return {back} per million");
+    }
+
+    /// What every game gives back through LUCK must stay below what the house keeps, or grinding LUCK beats the house.
+    /// A free chip is worth its face at most, so this is the worst case; 75 bps of every stake also goes to the church
+    /// and the jackpot, which is not the house's to spend.
+    #[test]
+    fn luck_never_costs_more_than_the_edge() {
+        let per_luck_wheel = WHEEL_PRIZES.iter().map(|(p, w)| f64::from(p * w)).sum::<f64>() / 100.0 / 100.0;
+        // Harmony: 50 LUCK, and one chance in a hundred at a pool of about 250 real chips
+        let per_luck_harmony = (HARMONY_PRIZES.iter().map(|(p, w)| f64::from(p * w)).sum::<f64>() / 100.0 + 2.5) / 50.0;
+        let slots: f64 = { let w = [4.0, 8.0, 14.0, 24.0, 50.0]; let mut r = 0.0; for a in 0..5 { for b in 0..5 { for c in 0..5 { r += w[a] * w[b] * w[c] / 1e6 * if a == b && b == c { SLOT_TRIPLE[a] as f64 } else if a == b || b == c { 1.0 } else { 0.0 }; } } } r };
+        for (game, edge) in [(SLOTS, 1.0 - slots), (COIN, 0.03), (DICE, 0.05), (ROULETTE, 1.0 / 37.0), (BLACKJACK, 0.0100), (MARKET, 0.05)] {
+            let luck = 80.0 * crate::constants::LUCK_WEIGHT[usize::from(game)] as f64 / 100.0 / 1000.0;
+            let back = luck * per_luck_wheel.max(per_luck_harmony);
+            println!("game {game}: edge {:.2}%, LUCK gives back {:.2}%", edge * 100.0, back * 100.0);
+            assert!(back < edge, "game {game}: {back} of {edge}");
+        }
     }
 }

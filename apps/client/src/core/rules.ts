@@ -74,7 +74,7 @@ export function resolveRoulette(d: number[], pick: number) {
 
 // ------------------------------------------------------------------------------------------ wheels
 export const WHEEL_PRIZES: [number, number][] = [[10, 30], [25, 30], [50, 20], [100, 15], [250, 4], [500, 1]];      // [chips, weight per 100]
-export const HARMONY_PRIZES: [number | 'JACKPOT', number][] = [[150, 40], [300, 30], [600, 20], [1500, 9], ['JACKPOT', 1]];
+export const HARMONY_PRIZES: [number | 'JACKPOT', number][] = [[10, 40], [20, 30], [40, 20], [100, 9], ['JACKPOT', 1]];
 export function pickWeighted<T>(table: [T, number][], draw: number): T {
   const r = mulShift(draw, 100); let acc = 0;
   for (const [v, w] of table) { acc += w; if (r < acc) return v; }
@@ -91,7 +91,7 @@ export const PARAMS = {
   tithePerTenChipsFaithMilli: 1000,// 10 chips tithed -> 1 FAITH before diminishing returns
   candleFaithMilli: 3000,
   candleCooldownS: 15,             // DEMO value. Production: 86_400 (daily)
-  harmonyCostMilli: 20000,         // consumes 20 LUCK and 20 FAITH
+  harmonyCostMilli: 50000,         // consumes 50 LUCK and 50 FAITH
   harmonyCooldownS: 120,           // DEMO value. Production: 86_400
   harmonyMinMilli: 50000,
   welcomeGrantChips: 500,
@@ -120,11 +120,13 @@ export const BLESSING = [
   { min: 75, title: 'Zealot', bps: 250 }, { min: 100, title: 'Saint', bps: 300 },
 ];
 export const blessingOf = (faith: number) => [...BLESSING].reverse().find((t) => faith >= t.min)!;
-/** payout (chips) for a winning bet: base x (10000 + blessing) / 10000, rounded down */
-export const withBlessing = (base: number, faith: number) => Math.floor((base * (10000 + blessingOf(faith).bps)) / 10000);
+/** payout (chips) for a winning bet: base x (10000 + blessing) / 10000 */
+export const withBlessing = (base: number, faith: number) => Math.round((base * (10000 + blessingOf(faith).bps)) / 100) / 100;
 
-/** LUCK granted by one bet, in LUCK units */
-export const luckForBet = (wager: number) => Math.min(PARAMS.luckPerBetCapMilli, wager * PARAMS.luckPerChipMilli) / 1000;
+/** LUCK is paid for by the house edge, so games with a small edge earn it slowly (onchain constants.rs LUCK_WEIGHT) */
+export const LUCK_WEIGHT: Record<string, number> = { slots: 100, coinflip: 50, dice: 100, roulette: 38, blackjack: 12, btc: 100 };
+/** LUCK granted by one bet of real chips, in LUCK units */
+export const luckForBet = (wager: number, game = 'slots') => Math.min(PARAMS.luckPerBetCapMilli, (wager * PARAMS.luckPerChipMilli * (LUCK_WEIGHT[game] ?? 0)) / 100) / 1000;
 /** FAITH granted by tithing `chips` chips at current faith (diminishing: full value at 0 faith, half at 100) */
 export const faithForTithe = (chips: number, faith: number) => (chips / 10) * (PARAMS.tithePerTenChipsFaithMilli / 1000) * (1 - faith / 200);
 
@@ -139,11 +141,11 @@ export const MACHINE_SKINS = ['gold', 'purple', 'red', 'blue'] as const;
 export type Counter = 'spins' | 'flips' | 'tithed' | 'candles' | 'converted';
 export interface QuestDef { id: string; bit: number; title: string; desc: string; counter: Counter; goal: number; reward: { chips?: number; faith?: number; luck?: number }; rewardText: string }
 export const QUESTS: QuestDef[] = [
-  { id: 'q-spin', bit: 0, title: 'First Spins', desc: 'Spin the slots 3 times.', counter: 'spins', goal: 3, reward: { chips: 50 }, rewardText: '50 chips' },
-  { id: 'q-flip', bit: 1, title: 'Heads or Tails', desc: 'Flip a coin once.', counter: 'flips', goal: 1, reward: { chips: 40 }, rewardText: '40 chips' },
+  { id: 'q-spin', bit: 0, title: 'First Spins', desc: 'Spin the slots 3 times.', counter: 'spins', goal: 3, reward: { chips: 50 }, rewardText: '50 bonus chips' },
+  { id: 'q-flip', bit: 1, title: 'Heads or Tails', desc: 'Flip a coin once.', counter: 'flips', goal: 1, reward: { chips: 40 }, rewardText: '40 bonus chips' },
   { id: 'q-tithe', bit: 2, title: 'Generous Soul', desc: 'Tithe 50 chips at the Offering Box.', counter: 'tithed', goal: 50, reward: { faith: 5 }, rewardText: '+5 FAITH' },
   { id: 'q-candle', bit: 3, title: 'Keep the Flame', desc: 'Light 2 votive candles.', counter: 'candles', goal: 2, reward: { luck: 4 }, rewardText: '+4 LUCK' },
-  { id: 'q-altar', bit: 4, title: 'Turn Luck to Faith', desc: 'Convert 20 LUCK at the Altar.', counter: 'converted', goal: 20, reward: { chips: 100 }, rewardText: '100 chips' },
+  { id: 'q-altar', bit: 4, title: 'Turn Luck to Faith', desc: 'Convert 20 LUCK at the Altar.', counter: 'converted', goal: 20, reward: { chips: 100 }, rewardText: '100 bonus chips' },
 ];
 
 // ------------------------------------------------------------------------------------------ blackjack (mirrors onchain blackjack.rs)
@@ -161,7 +163,7 @@ export function blackjackPayout(player: number[], dealer: number[], original: nu
   const pt = handTotal(player).total, dt = handTotal(dealer).total;
   const pn = player.length === 2 && pt === 21, dn = dealer.length === 2 && dt === 21;
   if (pn && dn) return { pay: original, label: 'push' };
-  if (pn) return { pay: Math.floor((original * 5) / 2), label: 'natural' };
+  if (pn) return { pay: (original * 5) / 2, label: 'natural' };
   if (dn) return { pay: Math.max(0, stake - original), label: 'lose' };
   if (pt > 21) return { pay: 0, label: 'lose' };
   if (dt > 21 || pt > dt) return { pay: stake * 2, label: 'win' };

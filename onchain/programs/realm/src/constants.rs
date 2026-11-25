@@ -17,6 +17,8 @@ pub const SEED_HOUSE_PURSE: &[u8] = b"house_purse";
 pub const SEED_HOUSE: &[u8] = b"house";
 pub const SEED_PLAYER: &[u8] = b"player";
 pub const SEED_MARKET: &[u8] = b"market";
+pub const SEED_PLOTS: &[u8] = b"plots";
+pub const SEED_BOARD: &[u8] = b"board";
 /// an address nobody owns, one per 60 rounds: it only makes the record of those rounds easy to find
 pub const SEED_ROUNDS: &[u8] = b"rounds";
 
@@ -29,6 +31,10 @@ pub const MAGIC_PROGRAM: Pubkey = pubkey!("Magic11111111111111111111111111111111
 pub const PRICE_PROGRAM: Pubkey = pubkey!("PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd");
 pub const INSTRUCTIONS_SYSVAR: Pubkey = pubkey!("Sysvar1nstructions1111111111111111111111111");
 pub const MARKET_ROTATE_AT: u32 = 9;
+
+/// LUCK per chip by game, as a percentage of `luck_per_chip_milli`. The Wheel is paid for by the house edge, so a game
+/// with a small edge earns LUCK slowly: slots, coin, dice, roulette, wheel, harmony, blackjack, market
+pub const LUCK_WEIGHT: [u64; 8] = [100, 50, 100, 38, 0, 0, 12, 100];
 
 pub const FLAG_WELCOME: u8 = 1;
 pub const FLAG_PLOT_GATE: u8 = 2;

@@ -1,0 +1,237 @@
+{
+ "at": "2026-11-25T16:20:03.030Z",
+ "checks": {
+  "welcome chips are free ones": {
+   "pass": true,
+   "info": {
+    "chips": 0,
+    "bonus": 30
+   }
+  },
+  "free chips cannot be cashed out": {
+   "pass": true,
+   "info": "NoChips"
+  },
+  "or tithed": {
+   "pass": true,
+   "info": "NoChips"
+  },
+  "what free chips win is real, and exact (19.4)": {
+   "pass": true,
+   "info": {
+    "won": 19.4
+   }
+  },
+  "free chips earn no LUCK": {
+   "pass": true,
+   "info": ""
+  },
+  "coin flip: 0.4 LUCK for 10 chips": {
+   "pass": true,
+   "info": {
+    "got": 400
+   }
+  },
+  "roulette: 0.304": {
+   "pass": true,
+   "info": {
+    "got": 304
+   }
+  },
+  "slots: 0.8": {
+   "pass": true,
+   "info": {
+    "got": 800
+   }
+  },
+  "tithe 50: FAITH and the treasury": {
+   "pass": true,
+   "info": {
+    "faith": 5000
+   }
+  },
+  "a tithe under 10": {
+   "pass": true,
+   "info": "BadArgs"
+  },
+  "a second candle at once": {
+   "pass": true,
+   "info": "Cooldown"
+  },
+  "a candle": {
+   "pass": true,
+   "info": {
+    "faith": 8000
+   }
+  },
+  "offering LUCK you do not have": {
+   "pass": true,
+   "info": "LuckLow"
+  },
+  "the altar: 1 LUCK becomes 0.8 FAITH": {
+   "pass": true,
+   "info": ""
+  },
+  "a quest not finished": {
+   "pass": true,
+   "info": "NotDone"
+  },
+  "a quest that does not exist": {
+   "pass": true,
+   "info": "BadArgs"
+  },
+  "a quest twice": {
+   "pass": true,
+   "info": "AlreadyClaimed"
+  },
+  "quests pay free chips and FAITH": {
+   "pass": true,
+   "info": ""
+  },
+  "Harmony without the meters": {
+   "pass": true,
+   "info": "LuckLow"
+  },
+  "Harmony spun: pays what its number says, takes 50 and 50": {
+   "pass": true,
+   "info": {
+    "want": 10
+   }
+  },
+  "Harmony again at once": {
+   "pass": true,
+   "info": "LuckLow"
+  },
+  "a plot without standing": {
+   "pass": true,
+   "info": "PlotGate"
+  },
+  "a bad name": {
+   "pass": true,
+   "info": "BadName"
+  },
+  "a plot claimed": {
+   "pass": true,
+   "info": {
+    "id": 1,
+    "name": "Test Machine"
+   }
+  },
+  "a plot that is taken": {
+   "pass": true,
+   "info": "PlotTaken"
+  },
+  "a machine that cannot cover the spin": {
+   "pass": true,
+   "info": "MaxBet"
+  },
+  "funding somebody else’s machine": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "emptying somebody else’s machine": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "closing somebody else’s machine": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "giving a machine away with a session key": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "spins: the machine pays and keeps, real chips only, no LUCK": {
+   "pass": true,
+   "info": {
+    "bankroll": 1039.7,
+    "plays": 4
+   }
+  },
+  "taking the reserve out": {
+   "pass": true,
+   "info": "Reserve"
+  },
+  "a campaign the oracle did not sign": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "a campaign with a bad link": {
+   "pass": true,
+   "info": "BadArgs"
+  },
+  "a campaign, its rewards in escrow": {
+   "pass": true,
+   "info": {
+    "id": 3,
+    "title": "Read the docs"
+   }
+  },
+  "a claim nobody attested": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "a claim attested by a stranger": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "claiming your own": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "an attested claim pays real chips and FAITH": {
+   "pass": true,
+   "info": ""
+  },
+  "claiming twice": {
+   "pass": true,
+   "info": "AlreadyClaimed"
+  },
+  "closing somebody else’s campaign": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "collecting from an open one": {
+   "pass": true,
+   "info": "TooEarly"
+  },
+  "collecting into somebody else’s account": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "what is left comes back": {
+   "pass": true,
+   "info": ""
+  },
+  "a machine campaign for a machine you do not own": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "without the plays": {
+   "pass": true,
+   "info": "NotDone"
+  },
+  "four spins prove a machine campaign": {
+   "pass": true,
+   "info": ""
+  },
+  "the Church’s own campaigns pay free chips": {
+   "pass": true,
+   "info": {
+    "title": "Follow MagicBlock on X"
+   }
+  },
+  "closing a machine returns its bankroll": {
+   "pass": true,
+   "info": ""
+  },
+  "final books": {
+   "pass": true,
+   "info": {
+    "vault": 4980,
+    "escrow": 118,
+    "machines": 0
+   }
+  }
+ }
+}

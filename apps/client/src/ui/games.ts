@@ -25,7 +25,11 @@ import { howToHtml, playHowTo } from './howto';
 type Root = HTMLElement;
 const $ = <T extends HTMLElement = HTMLElement>(r: ParentNode, s: string) => r.querySelector(s) as T;
 const $$ = (r: ParentNode, s: string) => Array.from(r.querySelectorAll<HTMLElement>(s));
-const fmt = (n: number) => Math.round(n).toLocaleString();
+/** chips: whole, or one decimal (1.94x of 10 is 19.4). Balances round down, so the screen never shows more than there is */
+const fmt = (n: number) => (Math.floor(n * 10 + 1e-6) / 10).toLocaleString();
+/** what a bet may use: bonus chips go first, then real ones */
+const spendable = () => store.eco.chips + store.eco.bonus;
+const bonusHtml = () => `<em id="bonus" ${store.eco.bonus > 0 ? '' : 'hidden'}>+${fmt(store.eco.bonus)} BONUS</em>`;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const rndOf = <T,>(a: readonly T[]) => a[Math.floor(Math.random() * a.length)];
 /** a short, tappable link to a transaction on Solana Explorer */
@@ -98,7 +102,7 @@ function shell(root: Root, close: () => void, theme: 'casino' | 'church', title:
   root.innerHTML = `<div class="gm ${theme}" role="dialog" aria-modal="true" aria-label="${title.replace(/<[^>]+>/g, '').replace(/"/g, '')}">
     <div class="gm-top"><div class="gm-title"><i class="bulbs"></i><span>${title}</span><i class="bulbs"></i></div>
       ${tier ? '<div class="gm-tier" id="tier"></div>' : ''}
-      <div class="g-lcd"><small>CREDITS</small><b id="bal">${fmt(store.eco.chips)}</b></div>
+      <div class="g-lcd"><small>CREDITS</small><b id="bal">${fmt(store.eco.chips)}</b>${bonusHtml()}</div>
       <button class="gm-x" data-close aria-label="Close">${X_SVG}</button></div>
     <div class="gm-body">${body}</div>
     <div class="gm-res" id="res" role="status" aria-live="assertive" hidden></div></div>`;
@@ -113,8 +117,8 @@ function refreshTier(root: Root) {
 function setBal(root: Root) {
   const el = root.querySelector('#bal') as HTMLElement | null; if (!el) return;
   const from = Number(el.textContent!.replace(/,/g, '')) || 0, to = store.eco.chips, t0 = performance.now();
-  const step = () => { const k = Math.min(1, (performance.now() - t0) / 500); el.textContent = fmt(from + (to - from) * k); if (k < 1) requestAnimationFrame(step); };
-  step(); refreshTier(root);
+  const step = () => { const k = Math.min(1, (performance.now() - t0) / 500); el.textContent = fmt(k < 1 ? Math.floor(from + (to - from) * k) : to); if (k < 1) requestAnimationFrame(step); };
+  step(); refreshTier(root); const bo = root.querySelector<HTMLElement>('#bonus'); if (bo) { bo.hidden = !(store.eco.bonus > 0); bo.textContent = `+${fmt(store.eco.bonus)} BONUS`; }
 }
 const chipRow = (cur: number, vals: readonly number[] = TABLE.bets, id = 'chips') => `<div class="g-chips" id="${id}">${vals.map(v => `<button class="g-chip v${v >= 100 ? 100 : v}" data-b="${v}" ${v === cur ? 'data-sel="1"' : ''}><span>${v >= 1000 ? `${v / 1000}K` : v}</span></button>`).join('')}</div>`;
 function wireChips(root: Root, set: (v: number) => void, busy: () => boolean, id = 'chips') {
@@ -137,7 +141,7 @@ function showResult(root: Root, kind: 'win' | 'lose' | 'push' | 'jackpot', title
   r.innerHTML = `${coins}<div class="rs-t">${title}</div><div class="rs-a" id="rsa">${typeof amount === 'number' ? '' : amount}</div><div class="rs-s">${sub}</div><div class="rs-tap">TAP TO CONTINUE</div>`;
   if (typeof amount === 'number') {
     const el = $(r, '#rsa'), t0 = performance.now(), sign = kind === 'lose' ? '-' : '+';
-    const step = () => { const k = Math.min(1, (performance.now() - t0) / 700); el.textContent = `${sign}${fmt(Math.abs(amount) * (1 - Math.pow(1 - k, 3)))}`; if (k < 1) requestAnimationFrame(step); };
+    const step = () => { const k = Math.min(1, (performance.now() - t0) / 700); el.textContent = `${sign}${fmt(k < 1 ? Math.floor(Math.abs(amount) * (1 - Math.pow(1 - k, 3))) : Math.abs(amount))}`; if (k < 1) requestAnimationFrame(step); };
     step();
   }
   const church = !!root.querySelector('.gm.church');
@@ -160,10 +164,10 @@ const oops = (root: Root, e: unknown) => {
  * Check the chips before anything moves: a bet the player cannot cover never starts the reels or the wheel, and
  * the message says where to get more. (The contract would refuse it anyway, but only after the animation ran.)
  */
-function canCover(root: Root, chips: number, what: 'bet' | 'tithe' = 'bet'): boolean {
-  if (store.eco.chips >= chips) return true;
+function canCover(root: Root, chips: number, what: 'bet' | 'tithe' | 'spin' = 'bet'): boolean {
+  if ((what === 'bet' ? spendable() : store.eco.chips) >= chips) return true;
   hideResult(root);
-  showResult(root, 'push', 'NOT ENOUGH CHIPS', '', `This ${what} is ${fmt(chips)} chips and you have ${fmt(store.eco.chips)}. Visit the Cashier by the casino door to buy more.`);
+  showResult(root, 'push', 'NOT ENOUGH CHIPS', '', `This ${what} is ${fmt(chips)} chips and you have ${fmt(what === 'bet' ? spendable() : store.eco.chips)}${what !== 'bet' && store.eco.bonus ? ' (bonus chips are only for playing)' : ''}. Visit the Cashier by the casino door to buy more.`);
   audio.play('hit', 0.3);
   return false;
 }
@@ -196,11 +200,12 @@ async function verifyBetView(root: Root, proof: BetProof) {
 }
 
 // ---------------------------------------------------------------------------------------------- SLOTS
-function slots(root: Root, close: () => void) {
+function slots(root: Root, close: () => void, machine?: { plot: number; name: string }) {
   let bet = tableBet(10), busy = false;
+  const own = machine ? backend.mode === 'chain' : false;
   const cur: string[][] = [0, 1, 2].map(() => [rndOf(SLOT_SYMS), rndOf(SLOT_SYMS), rndOf(SLOT_SYMS)]);
   const paySym = (s: string) => SYM[s].replace('width="28" height="28"', 'width="12" height="12"');
-  shell(root, close, 'casino', 'LUCKY SEVEN', `
+  shell(root, close, 'casino', machine ? esc(machine.name.toUpperCase()) : 'LUCKY SEVEN', `
   <div class="sl">
     <div class="sl-cab">
       <div class="sl-marq"><span class="nm">&#9733; SLOTS &#9733;</span><span class="jp"><small>JACKPOT</small><b id="jp">${fmt(store.stats.jackpot)}</b></span></div>
@@ -232,19 +237,19 @@ function slots(root: Root, close: () => void) {
   };
   const go = $<HTMLButtonElement>(root, '#go'), lever = $(root, '#lever'), line = $(root, '#line');
   const spin = async () => {
-    if (busy || !canCover(root, bet)) return; busy = true; go.disabled = true; hideResult(root);
+    if (busy || !canCover(root, bet, own ? 'spin' : 'bet')) return; busy = true; go.disabled = true; hideResult(root);
     line.classList.remove('on'); $$(root, '.sl-cell.hit').forEach(c => c.classList.remove('hit'));
     lever.classList.add('pull'); setTimeout(() => lever.classList.remove('pull'), 380);
     const snd = audio.loop('slots', 0.45); vib(12);
     [0, 1, 2].forEach(loop);
     try {
-      const [res] = await Promise.all([backend.placeBet({ game: 'slots', wager: bet }), sleep(1100)]);
+      const [res] = await Promise.all([backend.placeBet({ game: 'slots', wager: bet, machineId: machine?.plot }), sleep(1100)]);
       snd(1.6);                                          // the result is in: the reels wind down with the sound
       for (let i = 0; i < 3; i++) { if (i) await sleep(340); land(i, [rndOf(SLOT_SYMS), res.outcome.reels![i], rndOf(SLOT_SYMS)]); vib(6); }
       await sleep(700); setBal(root); $(root, '#jp').textContent = fmt(store.stats.jackpot);
       $(root, '#lw').textContent = fmt(res.payout);
       if (res.payout > 0) { line.classList.add('on'); strips.forEach(st => st.children[1]?.classList.add('hit')); }
-      verdict(root, bet, res.payout, res.blessing, res.payout > 0 ? '' : `LUCK +${res.luckGain.toFixed(1)}`, res.proof);
+      verdict(root, bet, res.payout, res.blessing, res.payout > 0 || own ? '' : `LUCK +${res.luckGain.toFixed(1)}`, res.proof);
     } catch (e) { [0, 1, 2].forEach(i => land(i, cur[i])); oops(root, e); }
     finally { snd(); busy = false; go.disabled = false; }
   };
@@ -539,7 +544,7 @@ function wheelPanel(root: Root, close: () => void, o: WheelCfg) {
       snd((LAND - 300) / 1000);
       await sp.land([mod360(-(j * th + th / 2))], LAND); rot = sp.angles[0];
       $(root, '#flap').classList.remove('tick'); setBal(root);
-      showResult(root, r.prize === 'JACKPOT' || r.chips >= 500 ? 'jackpot' : 'win', r.prize === 'JACKPOT' ? 'JACKPOT!' : 'YOU WIN!', r.chips, o.title + proofLinks(r.proof)); wireVerify(root, r.proof);
+      showResult(root, r.prize === 'JACKPOT' || r.chips >= 500 ? 'jackpot' : 'win', r.prize === 'JACKPOT' ? 'JACKPOT!' : 'YOU WIN!', r.chips, (r.prize === 'JACKPOT' ? 'The whole pool, in real chips' : 'Bonus chips: play them, and what they win is yours to cash out') + proofLinks(r.proof)); wireVerify(root, r.proof);
     } catch (e) { snd(0.8); await sp.land([mod360(rot)], 900); rot = sp.angles[0]; $(root, '#flap').classList.remove('tick'); oops(root, e); }
     finally { snd(); busy = false; show(); }
   });
@@ -551,17 +556,17 @@ function fortune(root: Root, close: () => void) {
     theme: 'casino', title: 'WHEEL OF FORTUNE', segs: FORTUNE_SEGS, colors: ['#c4202e', '#2f6fd0', '#1f8a4c', '#8a2ac4', '#f08a1a', '#1b1b24', '#d4a017', '#ff2e88'],
     meters: () => meter('luck', store.eco.luck), ready: () => store.eco.luck >= 100,
     why: () => 'Fill your LUCK to 100 by playing. A spin empties the meter.',
-    spin: () => backend.spinWheel(), prizes: '<span>TOP PRIZE 500</span><span>NEEDS LUCK 100</span>',
+    spin: () => backend.spinWheel(), prizes: '<span>TOP PRIZE 500 BONUS CHIPS</span><span>NEEDS LUCK 100</span>',
   });
 }
-const HARMONY_SEGS = ['150', '300', '600', '150', '1500', '300', '150', 'JACKPOT', '600', '300'];
+const HARMONY_SEGS = ['10', '20', '40', '10', '100', '20', '10', 'JACKPOT', '40', '20'];
 function harmony(root: Root, close: () => void, back?: () => void) {
   wheelPanel(root, close, {
     theme: 'church', title: 'HARMONY WHEEL', segs: HARMONY_SEGS, colors: ['#f0b84a', '#2f6fd0', '#8a2ac4', '#3fbf6a', '#c4202e', '#2f6fd0', '#f0b84a', '#ff2e88', '#8a2ac4', '#3fbf6a'],
     meters: () => meter('luck', store.eco.luck, 50) + meter('faith', store.eco.faith, 50),
     ready: () => store.eco.luck >= 50 && store.eco.faith >= 50 && Date.now() > store.stats.harmonyAt + PARAMS.harmonyCooldownS * 1000,
     why: () => (store.eco.luck >= 50 && store.eco.faith >= 50 ? 'The wheel is resting. Come back soon.' : 'Harmony needs 50 LUCK and 50 FAITH at the same time. Walk between both worlds.'),
-    spin: () => backend.spinHarmony(), prizes: `<span>JACKPOT POOL ${fmt(store.stats.jackpot)}</span><span>COSTS 20 LUCK + 20 FAITH</span>`, back,
+    spin: () => backend.spinHarmony(), prizes: `<span>JACKPOT POOL ${fmt(store.stats.jackpot)}</span><span>COSTS 50 LUCK + 50 FAITH</span><span>PRIZES ARE BONUS CHIPS</span>`, back,
   });
 }
 
@@ -622,10 +627,11 @@ function cashier(root: Root, close: () => void) {
   const exchange = () => {
     pane.innerHTML = `<div class="cs">
       <div class="cs-window"><div class="g-lcd green"><small>WALLET &middot; TEST SOL</small><b id="near"></b></div><div class="cs-rate">1 SOL = ${fmt(CHIPS_PER_SOL)} CHIPS<br><small>${backend.mode === 'mock' ? 'OFFLINE DEMO' : 'SOLANA DEVNET'}</small></div><div class="g-lcd"><small>CHIPS</small><b id="chp"></b></div></div>
+      <div class="cs-bonus" id="cs-bonus"></div>
       <div class="cs-col"><h4>BUY CHIPS</h4><div class="cs-row three"><button class="g-key" data-a="d1">0.01 SOL</button><button class="g-key" data-a="d5">0.05 SOL</button><button class="g-key" data-a="dall">ALL</button></div></div>
       <div class="cs-col"><h4>CASH OUT</h4><div class="cs-row"><button class="g-key dark" data-a="w">10 CHIPS</button><button class="g-key dark" data-a="wall">ALL CHIPS</button></div></div>
       <div class="cs-bottom">${backend.mode === 'chain' && backend.wallet ? '<button class="g-go wide" data-a="fund"><span>FUND WALLET</span></button>' : ''}<button class="g-go wide gold" data-a="faucet"><span>GET FREE TEST SOL</span></button></div></div>`;
-    const show = () => { $(root, '#near').textContent = store.eco.sol.toFixed(3); $(root, '#chp').textContent = fmt(store.eco.chips); setBal(root); };
+    const show = () => { $(root, '#near').textContent = store.eco.sol.toFixed(3); $(root, '#chp').textContent = fmt(store.eco.chips); $(root, '#cs-bonus').textContent = store.eco.bonus > 0 ? `+ ${fmt(store.eco.bonus)} bonus chips: play them first, they cannot be cashed out` : ''; setBal(root); };
     show();
     $$(pane, '[data-a]').forEach(b => b.addEventListener('click', async () => {
       const a = b.dataset.a!;
@@ -641,8 +647,8 @@ function cashier(root: Root, close: () => void) {
         else if (a === 'faucet') { const paid = await backend.faucet(); show(); showResult(root, 'push', 'FAUCET', paid ? `+${paid} SOL` : 'TEST SOL SENT', 'Free test SOL, straight to your wallet'); }
         else {
           if (a === 'wall') await backend.sync?.();      // ALL means what the chain holds now, not what the screen last showed
-          const amt = a === 'w' ? Math.min(10, store.eco.chips) : store.eco.chips;
-          if (amt <= 0) throw new BackendError('no_chips', 'You have no chips to cash out.');
+          const have = Math.floor(store.eco.chips), amt = a === 'w' ? Math.min(10, have) : have;
+          if (amt <= 0) throw new BackendError('no_chips', store.eco.bonus > 0 ? 'Bonus chips are for playing. What they win is yours to cash out.' : 'You have no chips to cash out.');
           await backend.withdraw(amt); show();
           showResult(root, 'push', 'CASHED OUT', `+${(amt / CHIPS_PER_SOL).toFixed(3)} SOL`, `${fmt(amt)} chips paid out`);
         }
@@ -789,7 +795,7 @@ function missions(root: Root, close: () => void) {
     try { rows = await backend.campaigns!(); } catch (e) { pane.innerHTML = `<div class="g-msg">${errText(e)}</div>`; return; }
     const live = rows.filter(r => r.active || r.claimed || r.mine);
     pane.innerHTML = `<div class="qlist">${live.map(r => {
-      const reward = [r.rewardChips ? `${r.rewardChips} chips` : '', r.rewardFaith ? `+${r.rewardFaith} FAITH` : ''].filter(Boolean).join(' &middot; ');
+      const reward = [r.rewardChips ? `${r.rewardChips} ${r.free ? 'bonus ' : ''}chips` : '', r.rewardFaith ? `+${r.rewardFaith} FAITH` : ''].filter(Boolean).join(' &middot; ');
       const machine = r.kind === 2;
       const ready = machine ? r.progress >= r.goal : true;
       const btn = r.claimed ? `<button class="seal" disabled>&#10003; DONE<small>${reward}</small></button>`
@@ -802,7 +808,7 @@ function missions(root: Root, close: () => void) {
         <small>${machine ? `Play ${r.goal} round${r.goal > 1 ? 's' : ''} on machine #${r.machineId}. Checked on chain.` : `${esc(new URL(r.url).hostname)} &middot; ${r.claims}/${r.maxClaims} done${r.mine ? ' &middot; YOURS' : ''}`}</small>
         ${machine ? `<div class="qbar"><i style="width:${Math.min(100, (r.progress / r.goal) * 100)}%"></i></div>` : `<div class="qbar"><i style="width:${(r.claims / r.maxClaims) * 100}%"></i></div>`}</div>${btn}</div>`;
     }).join('') || '<div class="g-msg">No campaigns on the board yet.</div>'}</div>
-    <p class="camp-note">Social tasks are on the honour system: open the link through the Church, then come back. The Father signs your claim and the contract pays it.
+    <p class="camp-note">Social tasks are on the honour system: open the link through the Church, then come back. The Father signs your claim and the program pays it.
       <b>To commission a mission of your own, visit the Commission Desk in the Scriptorium.</b></p>`;
     // START: open the link (outside the Church), start the visit timer, then CLAIM unlocks
     $$(pane, '[data-go]').forEach(b => b.addEventListener('click', async () => {
@@ -849,7 +855,7 @@ function missions(root: Root, close: () => void) {
     $$(root, '[data-q]:not([disabled])').forEach(b => b.addEventListener('click', async () => {
       if ((b as HTMLButtonElement).disabled) return;
       $$(root, '[data-q]').forEach(x => ((x as HTMLButtonElement).disabled = true));
-      try { const q = QUESTS.find(x => x.id === b.dataset.q)!; await pending(b, () => backend.claimQuest(q.id)); setBal(root); render(); showResult(root, 'win', 'QUEST COMPLETE', q.rewardText, q.title); }
+      try { const q = QUESTS.find(x => x.id === b.dataset.q)!; await pending(b, () => backend.claimQuest(q.id)); setBal(root); render(); showResult(root, 'win', 'QUEST COMPLETE', q.rewardText, q.title + (q.reward.chips ? '. Play them: what they win is yours.' : '')); }
       catch (e) { render(); oops(root, e); }
     }));
   };
@@ -890,20 +896,24 @@ function altar(root: Root, close: () => void) {
 
 // ---------------------------------------------------------------------------------------------- FOUNDERS' PLOT (deed)
 function plot(root: Root, close: () => void, id: number) {
+  void backend.plotsNow?.().then(() => { if (root.querySelector('.pl') && !root.querySelector('#nm')?.matches(':focus')) render(); }).catch(() => {});
   const render = () => {
     const p = store.plots[id], s = store.stats;
     if (p) {
       shell(root, close, 'casino', `PLOT #${id}`, `
       <div class="pl">
         <div class="deed"><h4>DEED OF OWNERSHIP</h4>
-          <div style="text-align:center;font-size:20px;color:#5a1a10;margin:4px 0">${p.name}</div>
-          <div style="text-align:center;font-family:var(--f-cap);font-size:7px;letter-spacing:.1em">${p.deed.toUpperCase()} &middot; NEP-245 &middot; OWNER ${p.owner.toUpperCase()}</div>
+          <div style="text-align:center;font-size:20px;color:#5a1a10;margin:4px 0">${esc(p.name)}</div>
+          <div style="text-align:center;font-family:var(--f-cap);font-size:7px;letter-spacing:.1em">${p.deed.toUpperCase()} &middot; OWNER ${esc(p.owner.toUpperCase())}${p.mine ? ' (YOU)' : ''}</div>
           <div class="stone" style="margin-top:10px"><div class="plate"><small>BANKROLL</small><b>${fmt(p.bankroll)}</b></div><div class="plate"><small>PLAYS</small><b>${p.plays}</b></div><div class="plate"><small>EARNED</small><b>${fmt(p.earned)}</b></div></div></div>
-        <div class="pl-side"><div class="skin ${p.skin} sel" style="width:64px;height:64px"></div><div class="g-msg">Your machine is live on the floor. Players' losses grow its bankroll; wins are paid from it.</div>
-          <div class="cs-row" style="width:100%"><button class="g-key" data-a="fund">FUND +100</button><button class="g-key dark" data-a="take">TAKE 100</button></div></div>
+        <div class="pl-side"><div class="skin ${p.skin} sel" style="width:64px;height:64px"></div><div class="g-msg">${p.mine === false ? 'Its owner pays the wins and keeps the losses. Real chips only here, and no LUCK: the house takes nothing.' : 'Your machine is live on the floor. Players\' losses grow its bankroll; wins are paid from it.'}</div>
+          ${backend.mode === 'chain' ? '<button class="g-go wide" data-a="play"><span>PLAY THIS MACHINE</span></button>' : ''}
+          ${p.mine === false ? '' : `<div class="cs-row" style="width:100%"><button class="g-key" data-a="fund">FUND +100</button><button class="g-key dark" data-a="take">TAKE 100</button></div>${backend.releasePlot ? '<button class="g-key dark" data-a="release" style="width:100%">CLOSE THE MACHINE</button>' : ''}`}</div>
       </div>`);
       $$(root, '[data-a]').forEach(b => b.addEventListener('click', async () => {
-        try { if (b.dataset.a === 'fund') await backend.fundMachine(id, 100); else await backend.withdrawMachine(id, 100); render(); }
+        const a = b.dataset.a; if (a === 'play') { slots(root, close, { plot: id, name: p.name }); return; }
+        if (a === 'release' && !confirm('Close this machine? Its whole bankroll comes back to you and the plot is free again.')) return;
+        try { await pending(b, () => (a === 'fund' ? backend.fundMachine(id, 100) : a === 'release' ? backend.releasePlot!(id) : backend.withdrawMachine(id, 100))); setBal(root); render(); }
         catch (e) { oops(root, e); }
       }));
       return;
@@ -918,13 +928,14 @@ function plot(root: Root, close: () => void, id: number) {
         <input id="nm" maxlength="16" placeholder="Name your machine" autocomplete="off" />
         <div class="row">${MACHINE_SKINS.map(k => `<button class="skin ${k} ${k === skin ? 'sel' : ''}" data-k="${k}" aria-label="${k}"></button>`).join('')}</div></div>
       <div class="pl-side"><div class="g-lab">STARTING BANKROLL</div>${chipRow(bankroll, [1, 1.5, 2].map(k => Math.round(plotPlayableBankroll() * k)), 'bk')}<div class="g-msg" style="font-size:10px">At least ${fmt(plotPlayableBankroll())}: a ${Math.min(...TABLE.bets)}-chip spin can pay 100x.</div>
-        <div class="g-msg">Claiming mints your deed (an NEP-245 token) and puts your own slot machine on the floor.</div>
+        <div class="g-msg">Claiming writes your deed on chain and puts your own slot machine on the floor. Players spin against your bankroll.</div>
         <button class="g-go gold wide" id="claim"><span>CLAIM PLOT</span></button></div>
     </div>`);
     wireChips(root, v => (bankroll = v), () => false, 'bk');
     $$(root, '.skin').forEach(b => b.addEventListener('click', () => { skin = b.dataset.k!; $$(root, '.skin').forEach(x => x.classList.toggle('sel', x === b)); }));
     $(root, '#claim').addEventListener('click', async () => {
-      try { await backend.claimPlot(id, ($(root, '#nm') as HTMLInputElement).value, skin, bankroll); audio.play('roulette', 0.5); render(); showResult(root, 'jackpot', 'DEED MINTED', store.plots[id]!.name, 'Your machine is on the floor'); }
+      const cb = $(root, '#claim');
+      try { await pending(cb, () => backend.claimPlot(id, ($(root, '#nm') as HTMLInputElement).value, skin, bankroll)); audio.play('roulette', 0.5); render(); showResult(root, 'jackpot', 'DEED MINTED', store.plots[id]!.name, 'Your machine is on the floor'); }
       catch (e) { oops(root, e); }
     });
   };
@@ -1119,11 +1130,11 @@ function commission(root: Root, close: () => void) {
     </div>`);
   const pane = $(root, '#cpane');
   const L = CAMPAIGN_LIMITS;
-  let mineOwner = '';
+  let mineOwner = '', tab = 'new';
   // ---- the form, with the requirements checked before anything is typed
   const form = async () => {
-    mineOwner = await myOwnerId();
-    const myMachines = Object.values(store.plots).filter(p => p.owner === mineOwner);
+    mineOwner = await myOwnerId(); if (tab !== 'new') return;      // the tab was changed while this loaded
+    const myMachines = Object.values(store.plots).filter(p => p.mine ?? p.owner === mineOwner);
     pane.innerHTML = `<form class="camp-form" id="cf">
       <div class="cm-reqs" id="reqs"></div>
       <div class="cf-row"><label>KIND</label><div class="cf-kinds">${['SOCIAL', 'PROJECT', 'MACHINE'].map((k, i) => `<button type="button" class="g-key ${i ? 'dark' : ''}" data-k="${i}" ${i === 2 && !myMachines.length ? 'disabled title="You need a machine on Founders’ Row"' : ''}>${k}</button>`).join('')}</div></div>
@@ -1181,20 +1192,21 @@ function commission(root: Root, close: () => void) {
   const mine = async () => {
     pane.innerHTML = '<div class="g-msg">Reading the ledger...</div>';
     let rows: CampaignRow[] = [];
-    try { rows = (await backend.campaigns?.()) ?? []; } catch (e) { pane.innerHTML = `<div class="g-msg">${errText(e)}</div>`; return; }
+    try { rows = (await backend.campaigns?.()) ?? []; } catch (e) { if (tab === 'mine') pane.innerHTML = `<div class="g-msg">${errText(e)}</div>`; return; }
+    if (tab !== 'mine') return;
     const own = rows.filter(r => r.mine);
     pane.innerHTML = `<div class="qlist">${own.map(r => `<div class="qcard camp ${r.active ? 'ready' : 'locked'}"><div class="qi">
         <b><span class="ktag k${r.kind}">${KIND_TAG[r.kind]}</span> ${esc(r.title)}</b>
         <small>${r.claims}/${r.maxClaims} done &middot; ${r.rewardChips} chips${r.rewardFaith ? ` + ${r.rewardFaith} FAITH` : ''} each${r.active ? '' : ' &middot; CLOSED'}</small>
         <div class="qbar"><i style="width:${(r.claims / r.maxClaims) * 100}%"></i></div></div>
-        ${r.active ? `<button class="seal" data-close="${r.id}">CLOSE<small>refund the rest</small></button>` : '<button class="seal" disabled>CLOSED</button>'}</div>`).join('')
+        ${r.active ? `<button class="seal" data-close="${r.id}">CLOSE<small>refund the rest</small></button>` : r.refund ? `<button class="seal" data-close="${r.id}">COLLECT<small>${fmt(r.refund)} chips</small></button>` : '<button class="seal" disabled>CLOSED</button>'}</div>`).join('')
       || '<div class="g-msg">You have not commissioned a mission yet.</div>'}</div>`;
     $$(pane, '[data-close]').forEach(b => b.addEventListener('click', async () => {
       if (!confirm('Close this mission? Whatever is left of its budget comes back to you.')) return;
-      try { await pending(b, () => backend.closeCampaign!(+b.dataset.close!)); setBal(root); void mine(); } catch (e) { oops(root, e); }
+      try { await pending(b, () => backend.closeCampaign!(+b.dataset.close!)); setBal(root); if (tab === 'mine') void mine(); } catch (e) { oops(root, e); }
     }));
   };
-  const switchTab = (t: string) => { $$(root, '#ctabs button').forEach(x => x.classList.toggle('on', x.dataset.t === t)); if (t === 'mine') void mine(); else void form(); };
+  const switchTab = (t: string) => { tab = t; $$(root, '#ctabs button').forEach(x => x.classList.toggle('on', x.dataset.t === t)); if (t === 'mine') void mine(); else void form(); };
   $$(root, '#ctabs button').forEach(b => b.addEventListener('click', () => { audio.play('hit', 0.25); switchTab(b.dataset.t!); }));
   void form();
 }
@@ -1618,7 +1630,7 @@ export function openSettings(m: HTMLElement, close: () => void, act: SettingsAct
 const GAMES: Partial<Record<PanelKind, (root: Root, close: () => void, id?: string) => void>> = {
   monitor, ledger, board, market, commission, places,
   chat: (root, close, id) => hostChat(root, close, id === 'nakamoto' ? 'nakamoto' : 'fortuna'),
-  slots, coinflip, dice, roulette, blackjack, cashier, offering, candles, missions, altar, confessional, wheel: fortune,
+  slots: (root, close) => slots(root, close), coinflip, dice, roulette, blackjack, cashier, offering, candles, missions, altar, confessional, wheel: fortune,
   harmony: (root, close) => harmony(root, close),
   plot: (root, close, id) => plot(root, close, Number((id ?? 'plot-1').replace('plot-', '')) || 1),
 };

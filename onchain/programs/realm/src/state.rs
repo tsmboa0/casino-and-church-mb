@@ -175,7 +175,9 @@ pub struct House {
     pub bump: u8,
     pub version: u8,
     pub _pad: [u8; 5],
-    pub spare: [u8; 256],
+    /// free chips in players' hands (not part of the books: nothing has been paid for them)
+    pub bonus_outstanding: u64,
+    pub spare: [u8; 248],
 }
 
 #[zero_copy]
@@ -193,7 +195,8 @@ pub struct PendingBet {
     pub plot: u8,
     pub active: u8,
     pub blessing_bps: u16,
-    pub _pad: u16,
+    /// how many chips of the stake were free ones
+    pub bonus_chips: u16,
 }
 
 /// Blackjack hand. Dealt cards are a 52-bit mask, so every draw is without replacement.
@@ -214,7 +217,8 @@ pub struct Hand {
     pub doubled: u8,
     /// what the pending VRF answer is for; 0 = nothing pending
     pub awaiting: u8,
-    pub _pad: u8,
+    /// how many chips of the stake were free ones
+    pub bonus_chips: u8,
     pub blessing_bps: u16,
 }
 
@@ -229,7 +233,9 @@ pub struct BtcSlot {
     pub side: u8,
     /// 0 = free, 1 = placed
     pub state: u8,
-    pub _pad: [u8; 2],
+    /// how many chips of the stake were free ones
+    pub bonus_chips: u8,
+    pub _pad: u8,
 }
 
 #[zero_copy]
@@ -241,8 +247,10 @@ pub struct BetResult {
     pub ts: u32,
     pub luck_gain_milli: u32,
     pub outcome: [u8; 4],
-    pub blessing_chips: u16,
+    /// hundredths of a chip
+    pub blessing_centi: u16,
     pub game: u8,
+    /// 1 jackpot, 2 the prize was free chips
     pub flags: u8,
 }
 
@@ -313,7 +321,9 @@ pub struct Player {
     /// the randomness that settled the last bet, so anybody can check it
     pub last_vrf: [u8; 32],
     pub last_vrf_seq: u64,
-    pub spare: [u8; 80],
+    /// free chips (lamports): for playing only. Never cashed out, never a debt: the vault pays when one WINS
+    pub bonus: u64,
+    pub spare: [u8; 72],
 }
 
 /// a round that is taking bets, or being decided
@@ -388,6 +398,74 @@ impl Market {
     pub const SPACE: usize = 8 + std::mem::size_of::<Market>();
 }
 
+/// Founders' Row
+#[zero_copy]
+#[repr(C)]
+pub struct Machine {
+    pub owner: Pubkey,
+    pub bankroll: u64,
+    pub reserved: u64,
+    pub plays: u64,
+    pub earned: i64,
+    pub name: [u8; 16],
+    /// 0 = an empty plot
+    pub id: u32,
+    pub skin: u8,
+    pub _pad: [u8; 3],
+}
+#[account(zero_copy)]
+#[repr(C)]
+pub struct Plots {
+    pub machines: [Machine; 3],
+    pub next_id: u32,
+    pub bump: u8,
+    pub _pad: [u8; 3],
+    pub spare: [u8; 256],
+}
+impl Plots {
+    pub const SPACE: usize = 8 + std::mem::size_of::<Plots>();
+}
+
+pub const BOARD_SLOTS: usize = 20;
+/// campaigns a board can ever have: their ids are bits in `Player.campaigns`
+pub const BOARD_IDS: u32 = 128;
+#[zero_copy]
+#[repr(C)]
+pub struct Campaign {
+    pub creator: Pubkey,
+    /// lamports not yet given out (or collected)
+    pub budget: u64,
+    pub created: i64,
+    pub id: u32,
+    pub machine_id: u32,
+    pub goal: u32,
+    pub reward_chips: u32,
+    pub reward_faith_milli: u32,
+    pub max_claims: u32,
+    pub claims: u32,
+    pub kind: u8,
+    pub active: u8,
+    pub from_treasury: u8,
+    pub title_len: u8,
+    pub url_len: u8,
+    pub _pad: [u8; 3],
+    pub title: [u8; 60],
+    pub url: [u8; 160],
+}
+#[account(zero_copy)]
+#[repr(C)]
+pub struct Board {
+    pub slots: [Campaign; BOARD_SLOTS],
+    pub next: u32,
+    pub index: u8,
+    pub bump: u8,
+    pub _pad: [u8; 2],
+    pub spare: [u8; 64],
+}
+impl Board {
+    pub const SPACE: usize = 8 + std::mem::size_of::<Board>();
+}
+
 impl Player {
     pub const SPACE: usize = 8 + std::mem::size_of::<Player>();
     /// a VRF answer is on its way (or a blackjack hand is open)
@@ -414,6 +492,9 @@ mod tests {
         assert_eq!((std::mem::size_of::<LiveRound>(), std::mem::size_of::<RoundRec>()), (56, 28));
         assert_eq!(Market::SPACE, 8 + 344 + 240 * 28 + 2_520);
         assert!(Market::SPACE <= MAX_COMMITTABLE);
+        assert_eq!((std::mem::size_of::<Machine>(), Plots::SPACE), (88, 8 + 264 + 8 + 256));
+        assert_eq!((std::mem::size_of::<Campaign>(), Board::SPACE), (304, 8 + 20 * 304 + 8 + 64));
+        assert!(Board::SPACE <= MAX_COMMITTABLE);
         // the rollup refuses to commit anything bigger
         assert!(Player::SPACE <= MAX_COMMITTABLE && House::SPACE <= MAX_COMMITTABLE);
     }

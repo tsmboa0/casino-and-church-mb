@@ -9,7 +9,8 @@ export interface Profile {
   /** the Solana wallet this profile belongs to (none in the offline demo) */
   wallet?: string;
 }
-export interface Economy { chips: number; luck: number; faith: number; sol: number; }
+/** `bonus`: free chips. They are played before real ones and cannot be cashed out; what they win is real */
+export interface Economy { chips: number; bonus: number; luck: number; faith: number; sol: number; }
 /** counters that drive the quest board (mock; becomes on-chain records later) */
 export interface Stats {
   spins: number; flips: number; dice: number; roulette: number; tithed: number; candles: number; converted: number;
@@ -19,7 +20,7 @@ export interface Stats {
 }
 /** one settled play, newest first (the chain version comes from the indexer: GET /bets?account=) */
 export interface HistRow { t: number; game: string; wager: number; payout: number; detail: string; /** settling tx on chain */ tx?: string }
-export interface Plot { id: number; owner: string; name: string; skin: string; bankroll: number; plays: number; earned: number; deed: string }
+export interface Plot { id: number; owner: string; name: string; skin: string; bankroll: number; plays: number; earned: number; deed: string; /** chain: is it mine, and how many chips are not held for a spin */ mine?: boolean; free?: number }
 const ECO_KEY = 'cnc.eco.v1';
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
@@ -40,7 +41,7 @@ export function savePos(p: SavedPos) { try { localStorage.setItem(POS_KEY, JSON.
 type Listener = () => void;
 class Store {
   profile: Profile | null = loadProfile();
-  eco: Economy = { chips: 500, luck: 34, faith: 22, sol: 0.5 };
+  eco: Economy = { chips: 500, bonus: 0, luck: 34, faith: 22, sol: 0.5 };
   stats: Stats = { spins: 0, flips: 0, dice: 0, roulette: 0, tithed: 0, candles: 0, converted: 0, wagered: 0, faithEarned: 0, claimed: {}, pool: 1280, jackpot: 2500, candleAt: 0, harmonyAt: 0, settledAt: Date.now(), nextBet: 1, net: 0, history: [] };
   plots: Record<number, Plot> = {};
   constructor() {
@@ -49,7 +50,8 @@ class Store {
   /** apply a delta to the economy (chips >= 0, LUCK/FAITH 0..100) and tell the HUD */
   change(d: Partial<Economy>) {
     const e = this.eco;
-    if (d.chips) e.chips = Math.max(0, Math.round(e.chips + d.chips));
+    if (d.chips) e.chips = Math.max(0, Math.round((e.chips + d.chips) * 100) / 100);
+    if (d.bonus) e.bonus = Math.max(0, Math.round(e.bonus + d.bonus));
     if (d.luck) e.luck = clamp(e.luck + d.luck, 0, 100);
     if (d.faith) e.faith = clamp(e.faith + d.faith, 0, 100);
     this.saveEco(); this.emit();

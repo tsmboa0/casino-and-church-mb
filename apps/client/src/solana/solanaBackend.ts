@@ -1,9 +1,9 @@
-import { addSignatures, addr, b64decode, b64encode, BJ, BJ_LABELS, buildTx, decodeFeed, decodeMarket, MARKET_HEAD, OUTCOMES, P, ChainError, CHIP, CHIPS_PER_SOL, compileMessage, GAME, GAME_NAMES, decodeHouse, decodePlayer, decodePurse, ix, REALM, Rpc, type BetResultState, type HandState, type Ix, type MarketState as ChainMarket, type PlayerState, type RoundRecState, type RoundState } from '@cnc/realm';
-import { cleanName, nameProblem } from '@cnc/shared';
+import { addSignatures, addr, b64decode, b64encode, BJ, BJ_LABELS, buildTx, decodeBoard, decodeFeed, decodeMarket, decodePlots, hasClaimed, MARKET_HEAD, OUTCOMES, P, ChainError, CHIP, CHIPS_PER_SOL, compileMessage, GAME, GAME_NAMES, decodeHouse, decodePlayer, decodePurse, ix, REALM, Rpc, type BetResultState, type HandState, type Ix, type MarketState as ChainMarket, type PlayerState, type RoundRecState, type RoundState } from '@cnc/realm';
+import { cleanName, nameProblem, type NewCampaign } from '@cnc/shared';
 import { BackendError } from '../core/errors';
-import type { Backend, BetProof, BetReq, BetResult, BjState, LbRow, MarketCrowdBet, MarketResult, MarketRound, MarketSide, MarketState, PastRound, WheelResult } from '../core/backend';
+import type { Backend, BetProof, BetReq, BetResult, BjState, CampaignRow, LbRow, MarketCrowdBet, MarketResult, MarketRound, MarketSide, MarketState, PastRound, WheelResult } from '../core/backend';
 import { bus } from '../core/bus';
-import { cardName, handTotal, PARAMS, QUESTS, setTableBets, SLOT_SYMS } from '../core/rules';
+import { cardName, handTotal, MACHINE_SKINS, PARAMS, QUESTS, setTableBets, SLOT_SYMS } from '../core/rules';
 import { store, type HistRow, type Plot } from '../core/state';
 import { ER_RPC, L1_RPC, loadWallet } from '../wallet';
 import { rollupBanner } from './banner';
@@ -15,6 +15,7 @@ const SAY: Record<string, string> = {
   Paused: 'The game is paused for a moment. Your chips are safe.', DepositsPaused: 'Buying chips is paused for a moment.', PayoutsPaused: 'Payouts are paused for a moment. Your SOL is safe.',
   BadAmount: 'That amount is not allowed.', NoChips: 'Not enough chips. Visit the Cashier.', VaultLow: 'The house cannot cover that right now.', AlreadyClaimed: 'Already claimed.', BetPending: 'Finish your open bet first.',
   BadPick: 'Pick something first.', BadWager: 'That bet is not offered at this table.', MaxBet: 'That is above the table limit right now.', MarketClosed: 'The BTC exchange is closed for a moment.', RoundMoved: 'That round has just closed. Try the next one.', RoundLocked: 'Betting on that round has closed. Try the next one.', AlreadyBet: 'You already have a bet on this round.', SlotsFull: 'Too many bets are still being settled. One moment.',
+  NotDone: 'Not finished yet.', CampaignClosed: 'That campaign has ended.', TreasuryLow: 'The treasury is too low for that.', PlotTaken: 'That plot is already owned.', PlotGate: 'Earn your standing first: wager 100 chips and earn 5 FAITH.', Reserve: 'The machine must keep 100 chips, and enough for a spin in progress.', BoardFull: 'The Quest Board is full. Try again when a campaign ends.', NotAllowed: 'That is not yours to do.',
   NoHand: 'That hand is over.', CannotDouble: 'You can only double on your first two cards.', LuckLow: 'Not enough LUCK yet.', FaithLow: 'Not enough FAITH yet.',
   BadSession: 'Your session ended. Sign in again to keep playing.', Cooldown: 'Too soon. Wait a moment.', BadName: 'That name is not allowed.', rollup_down: 'The rollup is updating. Your chips are safe. Try again in a minute.', l1_down: 'Solana is not answering. Try again in a moment.',
 };
@@ -26,6 +27,8 @@ const friendly = (e: unknown): BackendError => {
 const soon = (): never => { throw new BackendError('soon', 'This opens in the next update. Try it in the offline demo.'); };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const hex = (u: Uint8Array) => [...u].map((x) => x.toString(16).padStart(2, '0')).join('');
+/** lamports to chips, exactly */
+const n = (l: bigint) => Number(l) / 1e6;
 const sol = (l: bigint) => Number(l) / 1e9;
 
 /** The real game: SOL on Solana L1, play on a MagicBlock Ephemeral Rollup. Games arrive in the next milestones. */
@@ -41,7 +44,7 @@ export class SolanaBackend implements Backend {
     window.setInterval(() => { if (this.me && document.visibilityState === 'visible') void this.poll(); }, 12_000);
     window.setInterval(() => { if (this.me && this.player?.btc.length) void this.settleBtc(); }, 2_500);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && this.me) void this.poll(); });
-    void this.table();
+    void this.table(); void this.readPlots(); window.setInterval(() => { if (document.visibilityState === 'visible') void this.readPlots(); }, 30_000);
   }
 
   // ---------------------------------------------------------------- account
@@ -117,19 +120,19 @@ export class SolanaBackend implements Backend {
 
   // ---------------------------------------------------------------- bets: placed with the session key, settled by the VRF oracle
   async placeBet(r: BetReq): Promise<BetResult> {
-    const game = GAME[r.game as keyof typeof GAME]; if (game === undefined || game > GAME.roulette || r.machineId) return soon();
-    const { b, proof } = await this.bet(game, r.wager, r.pick ?? 0), o = b.outcome;
+    const game = GAME[r.game as keyof typeof GAME]; if (game === undefined || game > GAME.roulette) return soon();
+    const { b, proof } = await this.bet(game, r.wager, r.pick ?? 0, r.machineId), o = b.outcome;
     return {
-      betId: Number(b.seq), game: r.game, wager: r.wager, payout: Number(b.payout / CHIP), net: Number((b.payout - b.wager) / CHIP), blessing: b.blessingChips, luckGain: b.luckGainMilli / 1000,
+      betId: Number(b.seq), game: r.game, wager: r.wager, payout: n(b.payout), net: n(b.payout) - n(b.wager), blessing: b.blessing, luckGain: b.luckGainMilli / 1000,
       outcome: r.game === 'slots' ? { reels: o.slice(0, 3).map((i) => SLOT_SYMS[i]) } : r.game === 'coinflip' ? { side: o[0] === 0 ? 'H' : 'T' } : r.game === 'dice' ? { dice: [o[0], o[1]] } : { n: o[0], color: ['green', 'red', 'black'][o[1]] },
       proof,
     };
   }
-  async spinWheel(): Promise<WheelResult> { const { b, proof } = await this.bet(GAME.wheel, 0, 0); const c = Number(b.payout / CHIP); return { prize: c, chips: c, proof }; }
-  async spinHarmony(): Promise<WheelResult> { const { b, proof } = await this.bet(GAME.harmony, 0, 0); const c = Number(b.payout / CHIP); void this.readHouse(); return { prize: b.jackpot ? 'JACKPOT' : c, chips: c, proof }; }
-  private async bet(game: number, chips: number, pick: number) {
+  async spinWheel(): Promise<WheelResult> { const { b, proof } = await this.bet(GAME.wheel, 0, 0); const c = n(b.payout); return { prize: c, chips: c, proof }; }
+  async spinHarmony(): Promise<WheelResult> { const { b, proof } = await this.bet(GAME.harmony, 0, 0); const c = n(b.payout); void this.readHouse(); return { prize: b.jackpot ? 'JACKPOT' : c, chips: c, proof }; }
+  private async bet(game: number, chips: number, pick: number, plot?: number) {
     const seed = crypto.getRandomValues(new Uint8Array(32)); await this.free();
-    const placeTx = await this.play((w, s) => ix.placeBet(w, s, game, chips, pick, seed));
+    const placeTx = await this.play((w, s) => (plot ? ix.machineBet(w, s, plot, chips, seed) : ix.placeBet(w, s, game, chips, pick, seed)));
     const seq = this.player!.betSeq; const b = await this.settled(seq); return { b, proof: this.proof(seq, seed, placeTx) };
   }
   private proof(seq: bigint, seed: Uint8Array, placeTx: string): BetProof { const p = this.player!; return { seq: String(seq), randomness: p.lastVrfSeq === seq ? hex(p.lastVrf) : '', clientSeed: hex(seed), placeTx }; }
@@ -160,8 +163,8 @@ export class SolanaBackend implements Backend {
     const p = handTotal(h.player), d = handTotal(h.dealer), r = h.over ? this.player!.recent.find((x) => x.seq === h.seq) : undefined;
     return {
       betId: Number(h.seq), stage: h.over ? 'done' : 'player', player: h.player.map(cardName), dealer: h.dealer.map(cardName), playerTotal: p.total, dealerTotal: d.total, soft: p.soft, doubled: h.doubled, stake: Number(h.stake / CHIP),
-      canDouble: !h.over && h.player.length === 2 && !h.doubled && this.player!.chips >= h.original,
-      result: r && { label: BJ_LABELS[r.outcome[2]], payout: Number(r.payout / CHIP), blessing: r.blessingChips, proof: this.bjTx ? this.proof(h.seq, this.bjSeed, this.bjTx) : undefined },
+      canDouble: !h.over && h.player.length === 2 && !h.doubled && this.player!.chips + this.player!.bonus >= h.original,
+      result: r && { label: BJ_LABELS[r.outcome[2]], payout: n(r.payout), blessing: r.blessing, proof: this.bjTx ? this.proof(h.seq, this.bjSeed, this.bjTx) : undefined },
     };
   }
   /** the hand once it has moved past `cards` player cards (`end`: once it is over) */
@@ -221,7 +224,7 @@ export class SolanaBackend implements Backend {
   private async btcResult(b: BetResultState): Promise<MarketResult> {
     const low = b.outcome[2] | (b.outcome[3] << 8), find = () => this.mk.ring.find((r) => (r.epoch & 0xffff) === low); if (!find()) { this.mk.ringFor = 0n; await this.readMarket(0).catch(() => {}); }
     const r = find(), o = OUTCOMES[b.outcome[1]], link = r && await this.roundLink(r.epoch);
-    return { betId: Number(b.seq), side: b.outcome[0] === 1 ? 'up' : 'down', outcome: o === 'expired' ? 'void' : o, wager: Number(b.wager / CHIP), payout: Number(b.payout) / 1e6, blessing: b.blessingChips, lockPrice: r ? r.lockC / 100 : null, closePrice: r ? r.closeC / 100 : null, luckGain: b.luckGainMilli / 1000, epoch: r?.epoch, roundTx: link ?? undefined };
+    return { betId: Number(b.seq), side: b.outcome[0] === 1 ? 'up' : 'down', outcome: o === 'expired' ? 'void' : o, wager: Number(b.wager / CHIP), payout: Number(b.payout) / 1e6, blessing: b.blessing, lockPrice: r ? r.lockC / 100 : null, closePrice: r ? r.closeC / 100 : null, luckGain: b.luckGainMilli / 1000, epoch: r?.epoch, roundTx: link ?? undefined };
   }
   private async roundLink(epoch: number): Promise<string | null> { const k = this.mk.links.get(epoch); if (k?.tx) return k.tx; await Promise.race([this.pastRounds(epoch + 1).catch(() => []), sleep(900)]); return this.mk.links.get(epoch)?.tx ?? null; }
   /** anyone may settle a finished bet; our server does it too, whichever is first */
@@ -247,13 +250,52 @@ export class SolanaBackend implements Backend {
   async history(): Promise<HistRow[]> {
     const w = this.need(); const r = await this.get<{ bets: { game: string; wager: number; payout: number; detail: string; tx: string; at: number; seq: string }[] }>(`/bets?wallet=${w}`).catch(() => null);
     if (r) return r.bets.map((b) => ({ t: b.at, game: b.game, wager: b.wager, payout: b.payout, detail: b.detail, tx: b.tx }));
-    return (this.player?.recent ?? []).map((b) => ({ t: b.ts * 1000, game: GAME_NAMES[b.game], wager: Number(b.wager / CHIP), payout: Number(b.payout / CHIP), detail: '' }));      // our server is down: the last 8 are on chain
+    return (this.player?.recent ?? []).map((b) => ({ t: b.ts * 1000, game: GAME_NAMES[b.game], wager: n(b.wager), payout: n(b.payout), detail: '' }));      // our server is down: the last 8 are on chain
   }
   async leaderboard() { const r = await this.get<{ rows: (LbRow & { wallet: string })[] }>('/leaderboard').catch(() => ({ rows: [] })); return { rows: r.rows.map((x) => ({ rank: x.rank, name: x.name, wagered: x.wagered, net: x.net, you: x.wallet === this.me })), demo: false }; }
 
-  // ---------------------------------------------------------------- not yet on Solana (M5 to M7)
-  async tithe(): Promise<{ faithGain: number }> { return soon(); } async offerLuck(): Promise<{ faithGain: number }> { return soon(); } async lightCandle() { soon(); } async claimQuest() { soon(); }
-  async claimPlot(): Promise<Plot> { return soon(); } async fundMachine() { soon(); } async withdrawMachine() { soon(); }
+  // ---------------------------------------------------------------- the church
+  private async faithBy(make: (w: string, s: string) => Ix) { const before = this.player?.faithEarnedMilli ?? 0n; await this.play(make); return { faithGain: Number((this.player?.faithEarnedMilli ?? 0n) - before) / 1000 }; }
+  async tithe(chips: number) { const r = await this.faithBy((w, s) => ix.tithe(w, s, chips)); void this.readHouse(); return r; }
+  async offerLuck(luck: number) { return this.faithBy((w, s) => ix.offerLuck(w, s, Math.round(luck * 1000))); }
+  async lightCandle() { await this.play((w, s) => ix.lightCandle(w, s)); }
+  async claimQuest(id: string) { const q = QUESTS.find((x) => x.id === id); if (!q) throw new BackendError('quest', 'Unknown quest.'); await this.play((w, s) => ix.claimQuest(w, s, q.bit)); }
+
+  // ---------------------------------------------------------------- Founders' Row
+  private plotNames: Record<string, string> = {};
+  private async readPlots() {
+    const a = await this.er.account(addr.plots()).catch(() => null), l = a && decodePlots(a.data); if (!l) return;
+    const unknown = l.map((m) => m.owner).filter((o) => !this.plotNames[o]); if (unknown.length) { const r = await this.get<{ names: Record<string, string> }>(`/who?wallets=${unknown.join(',')}`).catch(() => ({ names: {} })); Object.assign(this.plotNames, r.names); }
+    const was = JSON.stringify(store.plots), next: Record<number, Plot> = {};
+    for (const m of l) next[m.plot] = { id: m.id, owner: this.plotNames[m.owner] ?? `${m.owner.slice(0, 4)}..${m.owner.slice(-4)}`, name: m.name, skin: MACHINE_SKINS[m.skin] ?? 'gold', bankroll: n(m.bankroll), plays: m.plays, earned: m.earned / 1e6, deed: `deed:machine:${m.id}`, mine: m.owner === this.me, free: n(m.bankroll - m.reserved) };
+    store.plots = next; if (JSON.stringify(next) !== was) { bus.emit('plotsChanged'); store.emit(); }
+  }
+  async claimPlot(id: number, name: string, skin: string, bankroll: number): Promise<Plot> { await this.play((w, s) => ix.claimPlot(w, s, id, name.trim(), Math.max(0, MACHINE_SKINS.indexOf(skin as never)), bankroll)); await this.readPlots(); return store.plots[id]; }
+  async fundMachine(id: number, chips: number) { await this.play((w, s) => ix.fundMachine(w, s, id, chips)); await this.readPlots(); }
+  async withdrawMachine(id: number, chips: number) { await this.play((w, s) => ix.fundMachine(w, s, id, -chips)); await this.readPlots(); }
+  async releasePlot(id: number) { await this.play((w, s) => ix.releasePlot(w, s, id)); await this.readPlots(); }
+  async plotsNow() { await this.readPlots(); }
+
+  // ---------------------------------------------------------------- campaigns: the Church oracle co-signs what it has read or seen
+  private async session() { const s = await loadSession(this.need()); if (!s) throw new BackendError('BadSession', SAY.BadSession); return s.signer; }
+  /** the server built and signed it for this player; we only add the session key */
+  private cosigned(tx: string): Promise<string> {
+    const run = async () => { const s = await this.session(); try { const sig = await this.er.send(addSignatures(b64decode(tx), [s])); await this.readPlayer(); return sig; } catch (e) { throw friendly(e); } };
+    const r = this.queue.then(run, run); this.queue = r.catch(() => {}); return r;
+  }
+  async campaigns(): Promise<CampaignRow[]> {
+    const [bs] = await Promise.all([Promise.all([0, 1].map(async (i) => { const a = await this.er.account(addr.board(i)); return (a && decodeBoard(a.data)) ?? []; })), this.readPlots()]); const p = this.player;
+    return bs.flat().sort((a, b) => b.created - a.created).map((c) => ({ id: c.id, kind: c.kind, creator: c.creator, title: c.title, url: c.url, machineId: c.machineId, goal: c.goal, rewardChips: c.rewardChips, rewardFaith: c.rewardFaithMilli / 1000, maxClaims: c.maxClaims, claims: c.claims, active: c.active, free: c.fromTreasury, refund: c.active ? 0 : n(c.budget), claimed: !!p && hasClaimed(p, c.id), progress: p?.machinePlays.find((m) => m.machineId === c.machineId)?.plays ?? 0, mine: c.creator === this.me }));
+  }
+  async startCampaign(id: number) { const r = await this.post<{ visit_s: number }>(`/campaigns/${id}/start`, {}).catch((e) => { throw friendly(e); }); return { visitS: r.visit_s }; }
+  async claimCampaign(id: number) {
+    const c = (await this.campaigns()).find((x) => x.id === id); if (!c) throw new BackendError('CampaignClosed', SAY.CampaignClosed); const f = this.player?.faithEarnedMilli ?? 0n;
+    if (c.kind === 2) await this.play((w, s) => ix.claimCampaign(w, s, id)); else { const s = await this.session(); const { tx } = await this.post<{ tx: string }>(`/campaigns/${id}/claim`, { session: s.address }); await this.cosigned(tx); }
+    return { chips: c.rewardChips, faith: Number((this.player?.faithEarnedMilli ?? 0n) - f) / 1000 };
+  }
+  async createCampaign(c: NewCampaign) { const s = await this.session(); const before = new Set((await this.campaigns()).map((x) => x.id)); const { tx } = await this.post<{ tx: string }>('/campaigns/approve', { session: s.address, campaign: c }); await this.cosigned(tx); return (await this.campaigns()).find((x) => x.mine && !before.has(x.id))?.id ?? 0; }
+  async closeCampaign(id: number) { const open = (await this.campaigns()).find((c) => c.id === id)?.active; if (open) await this.play((w, s) => ix.closeCampaign(w, s, id)); await this.act([ix.collectCampaign(id, this.need())]).catch((e) => { if ((e as BackendError).code !== 'NothingPending') throw e; }); }
+
 
   // ---------------------------------------------------------------- chain plumbing
   private need() { if (!this.me) throw new BackendError('signed_out', 'Sign in first.'); return this.me; }
@@ -272,7 +314,7 @@ export class SolanaBackend implements Backend {
   private async waitFor(f: () => Promise<unknown>, ms: number, every = 350) { const t = Date.now(); for (;;) { try { if (await f()) return; } catch (e) { if ((e as ChainError).code === 'rollup_down') rollupBanner(true); else if (Date.now() - t > ms) throw e; } if (Date.now() - t > ms) throw new ChainError('waited too long', 'timeout_wait'); await sleep(every); } }
   private apply(p: PlayerState) {
     this.player = p; const e = store.eco, s = store.stats;
-    e.chips = Number(p.chips / CHIP); e.luck = p.luckMilli / 1000; e.faith = p.faithMilli / 1000; s.settledAt = Date.now();
+    e.chips = n(p.chips); e.bonus = Number(p.bonus / CHIP); s.candleAt = p.candleAt * 1000; e.luck = p.luckMilli / 1000; e.faith = p.faithMilli / 1000; s.settledAt = Date.now();
     s.spins = p.spins; s.flips = p.flips; s.dice = p.dice; s.harmonyAt = p.harmonyAt * 1000; s.roulette = p.roulette; s.candles = p.candles; s.wagered = Number(p.wagered / CHIP); s.tithed = Number(p.tithed / CHIP); s.converted = Number(p.convertedMilli) / 1000; s.faithEarned = Number(p.faithEarnedMilli) / 1000;
     s.claimed = Object.fromEntries(QUESTS.filter((q) => p.questsClaimed & (1 << q.bit)).map((q) => [q.id, true]));
     this.fade(p.lastUpdate * 1000); store.emit(); this.watchBtc(p);

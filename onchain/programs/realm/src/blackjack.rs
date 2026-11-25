@@ -1,6 +1,6 @@
 //! Blackjack. Pure: no accounts, no CPI.
 //!
-//! One deck, no hole card, dealer stands on every 17, naturals pay 3:2 (whole chips), double on two cards, no split.
+//! One deck, no hole card, dealer stands on every 17, naturals pay 3:2, double on two cards, no split.
 //!
 //! Every action asks the oracle for its own randomness, so nothing about a later card exists before it is asked for.
 //! Cards of one answer come from sha256(randomness || k), k = 0, 1, 2...; dealt cards are a 52-bit mask, so every draw
@@ -9,6 +9,7 @@
 use crate::bets::{add_luck, bps, luck_award, record, take_blessing, wager_allowed, BetError, JACKPOT_BPS, TREASURY_BPS};
 use crate::constants::CHIP;
 use crate::games::{blessing_bps, mul_shift, BLACKJACK};
+use crate::money::{pay_bet, return_stake, take_stake};
 use crate::state::{Hand, House, Player};
 
 type R<T> = core::result::Result<T, BetError>;
@@ -50,7 +51,7 @@ pub fn table_payout(player: &[u8], dealer: &[u8], original: u64, stake: u64) -> 
     let (pt, dt) = (hand_total(player).0, hand_total(dealer).0);
     let (pn, dn) = (player.len() == 2 && pt == 21, dealer.len() == 2 && dt == 21);
     if pn && dn { return (original, PUSH); }
-    if pn { return (original / CHIP * 5 / 2 * CHIP, NATURAL); }
+    if pn { return (original * 5 / 2, NATURAL); }
     // original bets only: a double is given back when the dealer turns over a natural
     if dn { return (stake - original, LOSE); }
     if pt > 21 { return (0, LOSE); }
@@ -88,15 +89,14 @@ pub fn deal(p: &mut Player, h: &mut House, chips: u64, now: i64) -> R<u64> {
     if p.busy() { return Err(BetError::Busy); }
     wager_allowed(h, chips)?;
     let wager = chips.checked_mul(CHIP).ok_or(BetError::Overflow)?;
-    if p.chips < wager { return Err(BetError::NoChips); }
+    if p.chips.saturating_add(p.bonus / CHIP * CHIP) < wager { return Err(BetError::NoChips); }
     let hold = wager.checked_mul(4).ok_or(BetError::Overflow)?;
-    if h.vault.checked_add(wager).ok_or(BetError::Overflow)? < h.reserved.checked_add(hold).ok_or(BetError::Overflow)? { return Err(BetError::VaultLow); }
-    p.chips -= wager;
-    h.chips_outstanding -= wager;
-    h.vault += wager;
+    let real = wager - (p.bonus / CHIP).min(chips) * CHIP;
+    if h.vault.checked_add(real).ok_or(BetError::Overflow)? < h.reserved.checked_add(hold).ok_or(BetError::Overflow)? { return Err(BetError::VaultLow); }
+    let bonus_chips = take_stake(p, h, wager).ok_or(BetError::NoChips)?;
     h.reserved += hold;
     p.bet_seq += 1;
-    p.hand = Hand { seq: p.bet_seq, stake: wager, original: wager, hold, last_ts: now, stage: DEALING, awaiting: DEAL, blessing_bps: blessing_bps(p.faith_milli), ..bytemuck::Zeroable::zeroed() };
+    p.hand = Hand { seq: p.bet_seq, stake: wager, original: wager, hold, last_ts: now, stage: DEALING, awaiting: DEAL, bonus_chips, blessing_bps: blessing_bps(p.faith_milli), ..bytemuck::Zeroable::zeroed() };
     Ok(p.bet_seq)
 }
 
@@ -110,10 +110,9 @@ pub fn act(p: &mut Player, h: &mut House, action: u8, now: i64) -> R<(u64, u8)> 
         DOUBLE => {
             if p.hand.n_player != 2 || p.hand.doubled != 0 { return Err(BetError::CannotDouble); }
             let extra = p.hand.original;
-            if p.chips < extra { return Err(BetError::NoChips); }
-            p.chips -= extra;
-            h.chips_outstanding -= extra;
-            h.vault += extra;
+            if u64::from(p.hand.bonus_chips) + (p.bonus / CHIP).min(extra / CHIP) > 255 { return Err(BetError::MaxBet); }
+            let free = take_stake(p, h, extra).ok_or(BetError::NoChips)?;
+            p.hand.bonus_chips += free;
             p.hand.stake += extra;
             p.hand.doubled = 1;
         }
@@ -193,20 +192,21 @@ fn finish(p: &mut Player, h: &mut House, now: i64) -> Finished {
     let x = p.hand;
     let (pl, dl) = (&x.player[..usize::from(x.n_player)], &x.dealer[..usize::from(x.n_dealer)]);
     h.reserved = h.reserved.saturating_sub(x.hold);
-    let (t, j) = (bps(x.stake, TREASURY_BPS).min(h.vault), bps(x.stake, JACKPOT_BPS));
+    let free = u64::from(x.bonus_chips);
+    let real_stake = x.stake.saturating_sub(free * CHIP);
+    let (t, j) = (bps(real_stake, TREASURY_BPS).min(h.vault), bps(real_stake, JACKPOT_BPS));
     h.vault -= t;
     h.treasury += t;
     let j = j.min(h.vault);
     h.vault -= j;
     h.jackpot += j;
     let (pay, label) = table_payout(pl, dl, x.original, x.stake);
-    let pay = pay.min(h.vault);
-    h.vault -= pay;
-    let blessing = if label == WIN || label == NATURAL { take_blessing(h, pay, x.blessing_bps, now) } else { 0 };
-    let payout = pay + blessing;
-    p.chips += payout;
-    h.chips_outstanding += payout;
-    let luck = add_luck(p, luck_award(h, x.stake / CHIP, now));
+    let (total, real) = pay_bet(p, h, x.stake, free, pay);
+    let blessing = if label == WIN || label == NATURAL { take_blessing(h, real, x.blessing_bps, now) } else { 0 };
+    p.chips += blessing;
+    h.chips_outstanding += blessing;
+    let payout = total + blessing;
+    let luck = add_luck(p, luck_award(h, BLACKJACK, real_stake, now));
     p.blackjack = p.blackjack.saturating_add(1);
     p.wagered = p.wagered.saturating_add(x.stake);
     let outcome = [hand_total(pl).0, hand_total(dl).0, label, x.doubled];
@@ -220,9 +220,7 @@ pub fn refund(p: &mut Player, h: &mut House, now: i64) -> R<(u64, u64)> {
     if x.stage == OVER || x.awaiting == 0 { return Err(BetError::NothingPending); }
     if now < x.last_ts + i64::from(h.params.bet_timeout_s) { return Err(BetError::TooEarly); }
     h.reserved = h.reserved.saturating_sub(x.hold);
-    h.vault = h.vault.checked_sub(x.stake).ok_or(BetError::Overflow)?;
-    h.chips_outstanding += x.stake;
-    p.chips += x.stake;
+    return_stake(p, h, x.stake, u64::from(x.bonus_chips)).map_err(|_| BetError::Overflow)?;
     p.hand = bytemuck::Zeroable::zeroed();
     p.timeouts = p.timeouts.saturating_add(1);
     Ok((x.seq, x.stake))
@@ -272,7 +270,7 @@ mod tests {
         let c = CHIP;
         assert_eq!(table_payout(&[9, 10], &[9, 8], 10 * c, 10 * c), (20 * c, WIN));
         assert_eq!(table_payout(&[9, 10, 4], &[9, 8], 10 * c, 10 * c), (0, LOSE));
-        assert_eq!(table_payout(&[0, 9], &[9, 8], 25 * c, 25 * c), (62 * c, NATURAL));
+        assert_eq!(table_payout(&[0, 9], &[9, 8], 25 * c, 25 * c), (62_500_000, NATURAL));
         assert_eq!(table_payout(&[9, 10], &[0, 9], 10 * c, 20 * c), (10 * c, LOSE));
         assert_eq!(table_payout(&[0, 9], &[0, 9], 10 * c, 10 * c), (10 * c, PUSH));
         // three cards making 21 are not a natural
@@ -421,6 +419,26 @@ mod tests {
     }
 
     #[test]
+    fn free_chips_in_a_hand() {
+        let (mut p, mut h) = rig(5_000, 100);
+        crate::money::grant_bonus(&mut p, &mut h, 15 * CHIP).unwrap();
+        let s = deal(&mut p, &mut h, 10, 0).unwrap();
+        answer(&mut p, &mut h, &find(0, 3, |c| c[0] % 13 == 4 && c[1] % 13 == 5 && c[2] % 13 == 5), s, 0, 1).unwrap(); // 11 v 6
+        act(&mut p, &mut h, DOUBLE, 2).unwrap(); // 10 free, then 5 free and 5 real
+        assert_eq!((p.chips, p.bonus, p.hand.bonus_chips), (95 * CHIP, 0, 15));
+        let mut lost = (p, h);
+        let b = find(p.hand.used, 3, |c| c[0] % 13 == 9 && c[1] % 13 == 9 && c[2] % 13 == 8);
+        let d = answer(&mut p, &mut h, &b, s, 2, 3).unwrap().done.unwrap();
+        assert_eq!((d.payout, p.chips, p.bonus), (40 * CHIP, 135 * CHIP, 0), "a win is real");
+        balanced(&h);
+        // a push returns 15 free and 5 real
+        let b = find(lost.0.hand.used, 3, |c| c[0] % 13 == 7 && c[1] % 13 == 9 && c[2] % 13 == 2); // 19 v 6,10,3 = 19
+        let d = answer(&mut lost.0, &mut lost.1, &b, s, 2, 3).unwrap().done.unwrap();
+        assert_eq!((d.outcome[2], lost.0.chips, lost.0.bonus), (PUSH, 100 * CHIP, 15 * CHIP));
+        balanced(&lost.1);
+    }
+
+    #[test]
     fn random_hands_balance_and_the_vault_can_always_pay() {
         for seed in 1..=400u64 {
             let mut next = rng(seed);
@@ -429,18 +447,19 @@ mod tests {
             for _ in 0..40 {
                 now += (next() % 60) as i64;
                 p.faith_milli = (next() % 100_001) as u32;
-                let before = p.chips;
+                if next() % 3 == 0 { crate::money::grant_bonus(&mut p, &mut h, next() % 30 * CHIP).unwrap(); }
+                let before = p.chips + p.bonus;
                 let Ok(s) = deal(&mut p, &mut h, 10, now) else { continue };
                 let mut step = 0;
                 loop {
                     assert!(h.reserved <= h.vault);
                     balanced(&h);
-                    if next() % 25 == 0 { now += 200; let (_, back) = refund(&mut p, &mut h, now).unwrap(); assert_eq!(p.chips, before); assert!(back <= 20 * CHIP); break; }
+                    if next() % 25 == 0 { now += 200; let (_, back) = refund(&mut p, &mut h, now).unwrap(); assert_eq!(p.chips + p.bonus, before); assert!(back <= 20 * CHIP); break; }
                     let b = bytes(&mut next);
                     let r = answer(&mut p, &mut h, &b, s, step, now).unwrap();
                     if let Some(d) = r.done {
                         assert!(d.payout - d.blessing <= 4 * 10 * CHIP);
-                        assert_eq!(p.chips, before - d.wager + d.payout);
+                        assert_eq!(p.chips + p.bonus, before - d.wager + d.payout);
                         break;
                     }
                     assert!(hand_total(&p.hand.player[..usize::from(p.hand.n_player)]).0 < 21);
@@ -451,7 +470,7 @@ mod tests {
                 }
                 assert!(!p.busy() && h.reserved == 0);
                 assert_eq!(p.chips, h.chips_outstanding);
-                assert_eq!(p.chips % CHIP, 0, "whole chips");
+                assert_eq!((p.bonus % CHIP, p.bonus), (0, h.bonus_outstanding));
                 balanced(&h);
             }
         }

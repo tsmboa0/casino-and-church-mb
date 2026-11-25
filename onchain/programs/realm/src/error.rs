@@ -63,4 +63,18 @@ pub enum RealmError {
     SlotsFull,
     #[msg("bad price feed")]
     BadFeed,
+    #[msg("not finished yet")]
+    NotDone,
+    #[msg("that campaign has ended")]
+    CampaignClosed,
+    #[msg("the treasury is too low")]
+    TreasuryLow,
+    #[msg("that plot is taken")]
+    PlotTaken,
+    #[msg("not enough standing for a plot")]
+    PlotGate,
+    #[msg("the machine must keep its reserve")]
+    Reserve,
+    #[msg("the board is full")]
+    BoardFull,
 }

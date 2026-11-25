@@ -130,7 +130,47 @@ pub fn vault_free(h: &House) -> u64 {
     h.vault.saturating_sub(h.reserved)
 }
 
-/// Chips from the vault to a player (welcome, quests, promos).
+/// Free chips. Nothing leaves the vault for them now.
+pub fn grant_bonus(p: &mut Player, h: &mut House, amount: u64) -> R<()> {
+    p.bonus = add(p.bonus, amount)?;
+    h.bonus_outstanding = add(h.bonus_outstanding, amount)?;
+    Ok(())
+}
+/// Takes a stake, free chips first. Only the real part moves into the vault. None = not enough chips; otherwise how many
+/// free chips were used.
+pub fn take_stake(p: &mut Player, h: &mut House, wager: u64) -> Option<u8> {
+    let free = (p.bonus / CHIP).min(wager / CHIP).min(255);
+    let real = wager - free * CHIP;
+    if p.chips < real { return None; }
+    p.bonus -= free * CHIP;
+    h.bonus_outstanding = h.bonus_outstanding.saturating_sub(free * CHIP);
+    p.chips -= real;
+    h.chips_outstanding -= real;
+    h.vault += real;
+    Some(free as u8)
+}
+/// Pays a settled bet and returns (total, real part). A win is all real chips. What only returns the stake, or part of it,
+/// comes back the way it went in: free chips stay free.
+pub fn pay_bet(p: &mut Player, h: &mut House, stake: u64, free_chips: u64, base: u64) -> (u64, u64) {
+    let back = if base > stake { 0 } else { base.min(free_chips * CHIP) };
+    p.bonus += back;
+    h.bonus_outstanding += back;
+    let real = (base - back).min(h.vault);
+    h.vault -= real;
+    p.chips += real;
+    h.chips_outstanding += real;
+    (real + back, real)
+}
+/// Gives a whole stake back, each part to where it came from.
+pub fn return_stake(p: &mut Player, h: &mut House, stake: u64, free_chips: u64) -> R<()> {
+    let real = sub(stake, free_chips * CHIP)?;
+    h.vault = sub(h.vault, real)?;
+    h.chips_outstanding += real;
+    p.chips += real;
+    grant_bonus(p, h, free_chips * CHIP)
+}
+
+/// Chips from the vault to a player.
 pub fn grant_from_vault(p: &mut Player, h: &mut House, amount: u64) -> R<()> {
     if amount > vault_free(h) {
         return Err(MoneyError::VaultLow);
@@ -151,7 +191,7 @@ pub fn welcome(p: &mut Player, h: &mut House, flag: u8) -> R<u64> {
     if amount == 0 || paid > cap {
         return Err(MoneyError::VaultLow);
     }
-    grant_from_vault(p, h, amount)?;
+    grant_bonus(p, h, amount)?;
     h.welcome_paid = paid;
     p.flags |= flag;
     Ok(amount)
@@ -237,14 +277,11 @@ mod tests {
     #[test]
     fn welcome_once_and_within_the_cap() {
         let (mut p, mut h) = (player(), house());
-        assert_eq!(welcome(&mut p, &mut h, FLAG_WELCOME), Err(MoneyError::VaultLow));
-        h.vault = 1_000 * CHIP;
         assert_eq!(welcome(&mut p, &mut h, FLAG_WELCOME), Ok(30 * CHIP));
+        assert_eq!((p.chips, p.bonus, h.bonus_outstanding, h.vault), (0, 30 * CHIP, 30 * CHIP, 0));
+        assert_eq!(cash_out(&mut p, &mut h, 30), Err(MoneyError::NoChips), "free chips are not money");
         assert_eq!(welcome(&mut p, &mut h, FLAG_WELCOME), Err(MoneyError::AlreadyClaimed));
         h.params.welcome_cap_total_chips = 59;
-        assert_eq!(welcome(&mut player(), &mut h, FLAG_WELCOME), Err(MoneyError::VaultLow));
-        h.reserved = h.vault; // everything is held for open bets
-        h.params.welcome_cap_total_chips = 25_000;
         assert_eq!(welcome(&mut player(), &mut h, FLAG_WELCOME), Err(MoneyError::VaultLow));
     }
 

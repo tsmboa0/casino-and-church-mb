@@ -51,7 +51,7 @@ export async function checkBet(er: Rpc, wallet: string, proof: BetProof): Promis
     const e = settledFromLogs(logs, b64decode).find((x) => x.wallet === wallet && String(x.seq) === proof.seq), step = handStepsFromLogs(logs, b64decode).find((x) => x.wallet === wallet && String(x.seq) === proof.seq);
     if (!e && !step) continue;
     // the VRF program ran first, checked the oracle's proof, and called ours: that is the only way in
-    const top = logs.find((l) => / invoke \[1\]/.test(l) && !l.includes(P.computeBudget)) ?? ''; fromVrf &&= top.includes(P.vrf) && logs.some((l) => /Instruction: (SettleBet|BjSettle)/.test(l));
+    const top = logs.find((l) => / invoke \[1\]/.test(l) && !l.includes(P.computeBudget)) ?? ''; fromVrf &&= top.includes(P.vrf) && logs.some((l) => /Instruction: (SettleBet|BjSettle|SettleMachineBet)/.test(l));
     if (e) end = { e, tx: s.signature }; if (step) steps.push(step);
     if (end && (GAME_NAMES[end.e.game] !== 'blackjack' || steps.some((x) => x.action === BJ.deal))) break;
   }

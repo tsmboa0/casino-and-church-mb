@@ -11,14 +11,14 @@ export const P = {
 } as const;
 const k = (a: string) => b58decode(a);
 export const addr = {
-  config: () => pda(['config'], REALM), bank: () => pda(['bank'], REALM), housePurse: () => pda(['house_purse'], REALM), house: () => pda(['house'], REALM), market: () => pda(['market'], REALM),
+  config: () => pda(['config'], REALM), bank: () => pda(['bank'], REALM), housePurse: () => pda(['house_purse'], REALM), house: () => pda(['house'], REALM), market: () => pda(['market'], REALM), plots: () => pda(['plots'], REALM), board: (i: number) => pda(['board', u8(i)], REALM),
   /** nobody owns it: it only makes the L1 record of 60 rounds easy to find */
   roundsPage: (page: number) => pda(['rounds', u32(page)], REALM), marketCrank: (seed: Uint8Array) => pda(['crank', k(pda(['market'], REALM)), seed], P.hydra),
   purse: (w: string) => pda(['purse', k(w)], REALM), player: (w: string) => pda(['player', k(w)], REALM),
   sessionToken: (w: string, session: string) => pda(['session_token_v2', k(REALM), k(session), k(w)], P.session),
   programData: () => pda([k(REALM)], P.loader),
 };
-const fixed = (): Record<string, string> => ({ config: addr.config(), bank: addr.bank(), house_purse: addr.housePurse(), house: addr.house(), market: addr.market(), feed: P.btcFeed, instructions: P.instructions, hydra: P.hydra, ephemeral_vault: P.ephemeralVault, system_program: P.system, owner_program: REALM, delegation_program: P.delegation, magic_program: P.magic, magic_context: P.magicContext, program_id: REALM, program: REALM, program_data: addr.programData(), oracle_queue: P.vrfQueue, vrf_program: P.vrf, slot_hashes: P.slotHashes, program_identity: pda(['identity'], REALM) });
+const fixed = (): Record<string, string> => ({ config: addr.config(), bank: addr.bank(), house_purse: addr.housePurse(), house: addr.house(), market: addr.market(), plots: addr.plots(), feed: P.btcFeed, instructions: P.instructions, hydra: P.hydra, ephemeral_vault: P.ephemeralVault, system_program: P.system, owner_program: REALM, delegation_program: P.delegation, magic_program: P.magic, magic_context: P.magicContext, program_id: REALM, program: REALM, program_data: addr.programData(), oracle_queue: P.vrfQueue, vrf_program: P.vrf, slot_hashes: P.slotHashes, program_identity: pda(['identity'], REALM) });
 
 /** an instruction of our program. Accounts follow the IDL; the delegation helpers are derived from the account they serve. */
 export function realmIx(name: string, accounts: Record<string, string> = {}, args: Uint8Array = new Uint8Array()): Ix {
@@ -36,6 +36,8 @@ export function realmIx(name: string, accounts: Record<string, string> = {}, arg
     }),
   };
 }
+export interface CampaignInput { kind: number; title: string; url: string; machine_id: number; goal: number; reward_chips: number; reward_faith_milli: number; max_claims: number }
+const campaignBytes = (c: CampaignInput) => concat(u8(c.kind), str(c.title), str(c.url), u32(c.machine_id), u32(c.goal), u32(c.reward_chips), u32(c.reward_faith_milli), u32(c.max_claims));
 const mine = (w: string) => ({ authority: w, player: addr.player(w), purse: addr.purse(w) });
 const play = (w: string, signer: string) => ({ ...mine(w), signer, ...(signer === w ? {} : { session_token: addr.sessionToken(w, signer) }) });
 export const ix = {
@@ -65,6 +67,26 @@ export const ix = {
   marketCheckpoint: (signer: string) => realmIx('market_checkpoint', { signer }),
   delegateMarket: (payer: string) => realmIx('delegate_market', { payer }),
   logRounds: (page: number) => realmIx('log_rounds', { rounds: addr.roundsPage(page) }, u32(page)),
+  // the church
+  tithe: (w: string, signer: string, chips: number) => realmIx('tithe', play(w, signer), u64(chips)),
+  offerLuck: (w: string, signer: string, milli: number) => realmIx('offer_luck', play(w, signer), u32(milli)),
+  lightCandle: (w: string, signer: string) => realmIx('light_candle', play(w, signer)),
+  claimQuest: (w: string, signer: string, bit: number) => realmIx('claim_quest', play(w, signer), u8(bit)),
+  // Founders' Row
+  claimPlot: (w: string, signer: string, plot: number, name: string, skin: number, chips: number) => realmIx('claim_plot', play(w, signer), concat(u8(plot), str(name), u8(skin), u64(chips))),
+  /** more than 0 puts chips in, less takes them out */
+  fundMachine: (w: string, signer: string, plot: number, chips: number) => realmIx('fund_machine', play(w, signer), concat(u8(plot), i64(chips))),
+  releasePlot: (w: string, signer: string, plot: number) => realmIx('release_plot', play(w, signer), u8(plot)),
+  transferDeed: (w: string, plot: number, to: string) => realmIx('transfer_deed', play(w, w), concat(u8(plot), k(to))),
+  machineBet: (w: string, signer: string, plot: number, chips: number, clientSeed: Uint8Array) => realmIx('place_machine_bet', play(w, signer), concat(u8(plot), u64(chips), clientSeed)),
+  refundMachineBet: (w: string) => realmIx('refund_machine_bet', { authority: w, player: addr.player(w) }),
+  // campaigns: ids 0 to 127 live on board 0, the rest on board 1
+  createCampaign: (w: string, signer: string, oracle: string, board: number, c: CampaignInput) => realmIx('create_campaign', { ...play(w, signer), board: addr.board(board), oracle }, campaignBytes(c)),
+  seedCampaign: (admin: string, board: number, c: CampaignInput) => realmIx('seed_campaign', { admin, board: addr.board(board) }, campaignBytes(c)),
+  claimCampaign: (w: string, signer: string, id: number, oracle?: string) => realmIx('claim_campaign', { ...play(w, signer), board: addr.board(id >> 7), ...(oracle ? { oracle } : {}) }, u32(id)),
+  closeCampaign: (w: string, signer: string, id: number) => realmIx('close_campaign', { signer, authority: w, board: addr.board(id >> 7), ...(signer === w ? {} : { session_token: addr.sessionToken(w, signer) }) }, u32(id)),
+  /** anyone; `creator` unless the treasury paid for it */
+  collectCampaign: (id: number, creator?: string) => realmIx('collect_campaign', { board: addr.board(id >> 7), ...(creator ? { player: addr.player(creator) } : {}) }, u32(id)),
   refundStale: (w: string) => realmIx('refund_stale', { authority: w, player: addr.player(w) }),
   /** SessionTokenV2: the wallet, the session key and whoever pays all sign. No SOL goes to the session key. */
   createSession: (w: string, session: string, feePayer: string, validUntil: number): Ix => ({
@@ -81,8 +103,9 @@ class Reader { o = 8; v: DataView; constructor(public d: Uint8Array) { this.v = 
   u64() { const n = this.v.getBigUint64(this.o, true); this.o += 8; return n; } i64() { const n = Number(this.v.getBigInt64(this.o, true)); this.o += 8; return n; }
   key() { const a = b58encode(this.d.subarray(this.o, this.o + 32)); this.o += 32; return a; } raw(n: number) { const b = this.d.slice(this.o, this.o + n); this.o += n; return b; }
   text(n: number) { const b = this.raw(n); const z = b.indexOf(0); return new TextDecoder().decode(z < 0 ? b : b.subarray(0, z)); } skip(n: number) { this.o += n; } }
-export interface PlayerState { authority: string; chips: bigint; credited: bigint; withdrawn: bigint; withdrawnBooked: bigint; lastUpdate: number; lastRealmChange: number; candleAt: number; harmonyAt: number; lastAlms: number; wagered: bigint; tithed: bigint; convertedMilli: bigint; faithEarnedMilli: bigint; betSeq: bigint; luckMilli: number; faithMilli: number; questsClaimed: number; spins: number; flips: number; dice: number; roulette: number; blackjack: number; candles: number; timeouts: number; commits: number; realm: number; tourFlags: number; welcomeClaimed: boolean; plotGate: boolean; name: string; avatar: string; pendingActive: boolean; pending: { seq: bigint; wager: bigint; placedTs: number; clientSeed: Uint8Array; game: number; pick: number } | null; hand: HandState | null; btc: BtcSlotState[]; recent: BetResultState[]; lastVrf: Uint8Array; lastVrfSeq: bigint }
-export interface BetResultState { seq: bigint; wager: bigint; payout: bigint; ts: number; luckGainMilli: number; outcome: number[]; blessingChips: number; game: number; jackpot: boolean }
+export interface PlayerState { authority: string; chips: bigint; credited: bigint; withdrawn: bigint; withdrawnBooked: bigint; lastUpdate: number; lastRealmChange: number; candleAt: number; harmonyAt: number; lastAlms: number; wagered: bigint; tithed: bigint; convertedMilli: bigint; faithEarnedMilli: bigint; betSeq: bigint; luckMilli: number; faithMilli: number; questsClaimed: number; spins: number; flips: number; dice: number; roulette: number; blackjack: number; candles: number; timeouts: number; commits: number; realm: number; tourFlags: number; welcomeClaimed: boolean; plotGate: boolean; name: string; avatar: string; pendingActive: boolean; pending: { seq: bigint; wager: bigint; placedTs: number; clientSeed: Uint8Array; game: number; pick: number; plot: number } | null; hand: HandState | null; btc: BtcSlotState[]; recent: BetResultState[]; lastVrf: Uint8Array; lastVrfSeq: bigint; bonus: bigint; campaigns: Uint8Array; machinePlays: { machineId: number; plays: number }[] }
+/** `blessing` in chips; `free`: the prize was free chips */
+export interface BetResultState { seq: bigint; wager: bigint; payout: bigint; ts: number; luckGainMilli: number; outcome: number[]; blessing: number; game: number; jackpot: boolean; free: boolean }
 /** a BTC bet that has not been settled yet */
 export interface BtcSlotState { epoch: bigint; wager: bigint; seq: bigint; payoutBps: number; side: number }
 /** a blackjack hand; `over` hands stay readable until the next deal. `awaiting`: what the oracle has been asked for (0 nothing) */
@@ -96,15 +119,15 @@ export function decodePlayer(d: Uint8Array): PlayerState | null {
   const r = new Reader(d); const authority = r.key(), chips = r.u64(), credited = r.u64(), withdrawn = r.u64(), withdrawnBooked = r.u64();
   const lastUpdate = r.i64(), lastRealmChange = r.i64(), candleAt = r.i64(), harmonyAt = r.i64(), lastAlms = r.i64(); const wagered = r.u64(), tithed = r.u64(), convertedMilli = r.u64(), faithEarnedMilli = r.u64(); r.u64(); const betSeq = r.u64();
   const luckMilli = r.u32(), faithMilli = r.u32(), questsClaimed = r.u32(); r.skip(12); const spins = r.u32(), flips = r.u32(), dice = r.u32(), roulette = r.u32(), blackjack = r.u32(), candles = r.u32(), timeouts = r.u32(), commits = r.u32();
-  const realm = r.u8(), tourFlags = r.u8(), flags = r.u8(); r.skip(5); const name = r.text(16), avatar = r.text(24); r.skip(32 + 24); const p0 = r.o, pendingActive = d[p0 + 75] !== 0;
-  const pSeq = r.u64(), pWager = r.u64(); r.skip(16); const placedTs = r.i64(), clientSeed = r.raw(32); const pending = pendingActive ? { seq: pSeq, wager: pWager, placedTs, clientSeed, game: d[p0 + 72], pick: d[p0 + 73] } : null;
+  const realm = r.u8(), tourFlags = r.u8(), flags = r.u8(); r.skip(5); const name = r.text(16), avatar = r.text(24); const campaigns = r.raw(32), machinePlays = [0, 1, 2].map(() => ({ machineId: r.u32(), plays: r.u32() })); const p0 = r.o, pendingActive = d[p0 + 75] !== 0;
+  const pSeq = r.u64(), pWager = r.u64(); r.skip(16); const placedTs = r.i64(), clientSeed = r.raw(32); const pending = pendingActive ? { seq: pSeq, wager: pWager, placedTs, clientSeed, game: d[p0 + 72], pick: d[p0 + 73], plot: d[p0 + 74] } : null;
   r.o = p0 + 80; const hSeq = r.u64(), stake = r.u64(), original = r.u64(); r.u64(); const lastTs = r.i64(), used = r.u64(), pc = [...r.raw(12)], dc = [...r.raw(12)], np = r.u8(), nd = r.u8(), stage = r.u8(), dbl = r.u8(), awaiting = r.u8();
   const hand: HandState | null = hSeq ? { seq: hSeq, stake, original, lastTs, used, player: pc.slice(0, np), dealer: dc.slice(0, nd), over: stage === 0, dealing: stage === 1, doubled: dbl !== 0, awaiting } : null;
   r.o = p0 + 160; const btc: BtcSlotState[] = []; for (let i = 0; i < 8; i++) { const epoch = r.u64(), wager = r.u64(), seq = r.u64(), payoutBps = r.u16(); r.u16(); const side = r.u8(), st = r.u8(); r.skip(2); if (st) btc.push({ epoch, wager, seq, payoutBps, side }); }
   r.o = p0 + 80 + 80 + 256; const recent: BetResultState[] = [];
-  for (let i = 0; i < 8; i++) { const seq = r.u64(), wager = r.u64(), payout = r.u64(), ts = r.u32(), luckGainMilli = r.u32(), outcome = [...r.raw(4)], blessingChips = r.u16(), game = r.u8(), flags = r.u8(); if (seq) recent.push({ seq, wager, payout, ts, luckGainMilli, outcome, blessingChips, game, jackpot: !!(flags & 1) }); }
-  recent.sort((a, b) => (a.seq < b.seq ? 1 : -1)); const lastVrf = r.raw(32), lastVrfSeq = r.u64();
-  return { authority, chips, credited, withdrawn, withdrawnBooked, lastUpdate, lastRealmChange, candleAt, harmonyAt, lastAlms, wagered, tithed, convertedMilli, faithEarnedMilli, betSeq, luckMilli, faithMilli, questsClaimed, spins, flips, dice, roulette, blackjack, candles, timeouts, commits, realm, tourFlags, welcomeClaimed: !!(flags & 1), plotGate: !!(flags & 2), name, avatar, pendingActive, pending, hand, btc, recent, lastVrf, lastVrfSeq };
+  for (let i = 0; i < 8; i++) { const seq = r.u64(), wager = r.u64(), payout = r.u64(), ts = r.u32(), luckGainMilli = r.u32(), outcome = [...r.raw(4)], blessing = r.u16() / 100, game = r.u8(), flags = r.u8(); if (seq) recent.push({ seq, wager, payout, ts, luckGainMilli, outcome, blessing, game, jackpot: !!(flags & 1), free: !!(flags & 2) }); }
+  recent.sort((a, b) => (a.seq < b.seq ? 1 : -1)); const lastVrf = r.raw(32), lastVrfSeq = r.u64(), bonus = r.u64();
+  return { authority, chips, credited, withdrawn, withdrawnBooked, lastUpdate, lastRealmChange, candleAt, harmonyAt, lastAlms, wagered, tithed, convertedMilli, faithEarnedMilli, betSeq, luckMilli, faithMilli, questsClaimed, spins, flips, dice, roulette, blackjack, candles, timeouts, commits, realm, tourFlags, welcomeClaimed: !!(flags & 1), plotGate: !!(flags & 2), name, avatar, pendingActive, pending, hand, btc, recent, lastVrf, lastVrfSeq, bonus, campaigns, machinePlays };
 }
 export interface PurseState { owner: string; deposited: bigint; paidOut: bigint; lastDepositTs: number }
 export function decodePurse(d: Uint8Array): PurseState | null { if (d.length < 60 || !has(d, 'Purse')) return null; const r = new Reader(d); return { owner: r.key(), deposited: r.u64(), paidOut: r.u64(), lastDepositTs: r.i64() }; }
@@ -135,6 +158,21 @@ export function decodeMarket(d: Uint8Array): MarketState | null {
 }
 /** the oracle's price, as the program reads it: US cents and publish time */
 export function decodeFeed(d: Uint8Array): { cents: number; at: number } | null { if (d.length < 101) return null; const v = new DataView(d.buffer, d.byteOffset, d.byteLength), p = v.getBigInt64(73, true); return p > 0n ? { cents: Number((p + 500_000n) / 1_000_000n), at: Number(v.getBigInt64(93, true)) } : null; }
+
+// ---------------------------------------------------------------- Founders' Row and the Quest Board
+export interface MachineState { plot: number; id: number; owner: string; name: string; skin: number; bankroll: bigint; reserved: bigint; plays: number; earned: number }
+export function decodePlots(d: Uint8Array): MachineState[] | null {
+  if (!has(d, 'Plots')) return null; const r = new Reader(d), out: MachineState[] = [];
+  for (let i = 0; i < 3; i++) { const owner = r.key(), bankroll = r.u64(), reserved = r.u64(), plays = Number(r.u64()), earned = r.i64(), name = r.text(16), id = r.u32(), skin = r.u8(); r.skip(3); if (id) out.push({ plot: i + 1, id, owner, name, skin, bankroll, reserved, plays, earned }); }
+  return out;
+}
+export interface CampaignState { id: number; creator: string; budget: bigint; created: number; machineId: number; goal: number; rewardChips: number; rewardFaithMilli: number; maxClaims: number; claims: number; kind: number; active: boolean; fromTreasury: boolean; title: string; url: string }
+export function decodeBoard(d: Uint8Array): CampaignState[] | null {
+  if (!has(d, 'Board')) return null; const r = new Reader(d), out: CampaignState[] = [];
+  for (let i = 0; i < 20; i++) { const start = r.o; const creator = r.key(), budget = r.u64(), created = r.i64(), id = r.u32(), machineId = r.u32(), goal = r.u32(), rewardChips = r.u32(), rewardFaithMilli = r.u32(), maxClaims = r.u32(), claims = r.u32(), kind = r.u8(), active = r.u8() !== 0, fromTreasury = r.u8() !== 0, tl = r.u8(), ul = r.u8(); r.skip(3); const title = new TextDecoder().decode(r.raw(60).subarray(0, tl)), url = new TextDecoder().decode(r.raw(160).subarray(0, ul)); r.o = start + 304; if (created) out.push({ id, creator, budget, created, machineId, goal, rewardChips, rewardFaithMilli, maxClaims, claims, kind, active, fromTreasury, title, url }); }
+  return out;
+}
+export const hasClaimed = (p: Pick<PlayerState, 'campaigns'>, id: number) => !!(p.campaigns[id >> 3] >> (id & 7) & 1);
 
 // ---------------------------------------------------------------- events ("Program data: ..." in the logs)
 export interface SettledEvent { wallet: string; seq: bigint; game: number; pick: number; wager: bigint; payout: bigint; blessing: bigint; luckGainMilli: number; outcome: number[]; jackpot: boolean; randomness: Uint8Array }

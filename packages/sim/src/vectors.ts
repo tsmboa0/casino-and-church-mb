@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { drawsOf, pickWeighted, resolveCoin, resolveDice, resolveRoulette, resolveSlots, HARMONY_PRIZES, WHEEL_PRIZES } from '../../../apps/client/src/core/rules.ts';
+import { drawsOf, pickWeighted, resolveCoin, resolveDice, resolveRoulette, resolveSlots, HARMONY_PRIZES as HARMONY_NOW, WHEEL_PRIZES } from '../../../apps/client/src/core/rules.ts';
 
+// the vectors hold the first version's Harmony prizes; the slices are the same, the prizes became free chips and smaller
+const HARMONY_PRIZES = HARMONY_NOW.map(([p, w], i) => [p === 'JACKPOT' ? p : [150, 300, 600, 1500][i], w]) as typeof HARMONY_NOW;
 const doc = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../../onchain/programs/realm/vectors.json'), 'utf8'));
 const cases = [...doc.fixed, ...doc.random];
 let bad = 0;

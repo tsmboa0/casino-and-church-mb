@@ -30,7 +30,7 @@ export class Keeper {
         try {
           if (l1p[i]!.owner === REALM) { await this.send(this.l1, [ix.delegatePlayer(this.sponsor.address, ws[i])], this.sponsor); this.status.redelegated++; }   // rotated off at the commit cap
           else if (live && live.credited < pu.deposited) { await this.send(this.er, [ix.syncDeposit(ws[i])], this.key); this.status.synced++; }
-          if (live?.pending && Date.now() / 1000 > live.pending.placedTs + 185) { await this.send(this.er, [ix.refundStale(ws[i])], this.key); this.status.refunded++; }   // the oracle never answered
+          if (live?.pending && Date.now() / 1000 > live.pending.placedTs + 185) { await this.send(this.er, [live.pending.plot ? ix.refundMachineBet(ws[i]) : ix.refundStale(ws[i])], this.key); this.status.refunded++; }   // the oracle never answered
           if (live && this.market) await this.market.sweep(ws[i], live);
           const hand = live?.hand, idle = hand && !hand.over ? Date.now() / 1000 - hand.lastTs : 0;
           if (hand && hand.awaiting && idle > 185) { await this.send(this.er, [ix.refundStale(ws[i])], this.key); this.status.refunded++; }

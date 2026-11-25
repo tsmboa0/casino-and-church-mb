@@ -1,6 +1,6 @@
 import cors from '@fastify/cors'; import Fastify from 'fastify'; import type { FastifyRequest } from 'fastify';
-import { addr, b58decode, b64decode, b64encode, CHIP, decodeHouse, ix, REALM, type Rpc } from '@cnc/realm';
-import { cleanName, nameKey, nameProblem } from '@cnc/shared';
+import { addr, b58decode, b64decode, b64encode, buildTx, CHIP, compileMessage, decodeBoard, decodeHouse, decodePlayer, hasClaimed, ix, REALM, type Ix, type Rpc } from '@cnc/realm';
+import { campaignProblem, cleanName, nameKey, nameProblem, type NewCampaign } from '@cnc/shared';
 import { verifyPrivy } from './privy.ts'; import { FAUCET_FLOOR, SETUP_FLOOR, type Config } from './config.ts'; import { HttpError, type Sponsor } from './sponsor.ts'; import type { Keeper } from './keeper.ts'; import type { Indexer } from './indexer.ts'; import type { MarketKeeper } from './market.ts'; import type { SolStore } from './store.ts';
 
 export interface Deps { config: Config; store: SolStore; l1: Rpc; er: Rpc; sponsor: Sponsor | null; keeper: Keeper | null; indexer?: Indexer | null; market?: MarketKeeper | null }
@@ -60,6 +60,34 @@ export function buildApp(d: Deps) {
   });
 
   app.get('/bets', async (q) => ({ bets: await d.store.bets(wallet((q.query as any).wallet), 50) }));
+  // ---------------------------------------------------------------- campaigns. The oracle signs whole transactions that we built, so a
+  // signature can only ever be used for that player and that campaign, for as long as its blockhash lives.
+  const VISIT_S = 20, opened = new Map<string, number>();
+  const oracle = () => { if (!d.config.oracle) throw new HttpError(503, 'no_oracle', 'Father Nakamoto is away. Try again later.'); return d.config.oracle; };
+  const cosign = async (session: string, ixs: Ix[]) => b64encode(buildTx(compileMessage(session, ixs, await d.er.blockhash()), [oracle()]));
+  const boards = async () => Promise.all([0, 1].map(async (i) => { const a = await d.er.account(addr.board(i)); return (a && decodeBoard(a.data)) ?? []; }));
+  const me = async (q: FastifyRequest) => { const row = await d.store.byDid(did(q)); if (!row) throw new HttpError(403, 'no_account', 'Finish signing in first.'); return row; };
+  /** moderation: the Father signs only what passes the Church's rules (no wallet or airdrop links, known sites) */
+  app.post('/campaigns/approve', async (q) => {
+    const row = await me(q), b = (q.body ?? {}) as any, s = wallet(b.session), c = b.campaign ?? {};
+    const n: NewCampaign = { kind: Number(c.kind), title: String(c.title ?? ''), url: String(c.url ?? ''), machine_id: Number(c.machine_id ?? 0), goal: Number(c.goal ?? 0), reward_chips: Number(c.reward_chips ?? 0), reward_faith_milli: Number(c.reward_faith_milli ?? 0), max_claims: Number(c.max_claims ?? 0) };
+    for (const v of [n.kind, n.machine_id, n.goal, n.reward_chips, n.reward_faith_milli, n.max_claims]) if (!Number.isInteger(v) || v < 0) throw new HttpError(400, 'bad_campaign', 'Use whole numbers.');
+    const problem = campaignProblem(n) ?? (/^[\x20-\x7e]+$/.test(n.title) ? null : 'Plain letters only in the title, please.'); if (problem) throw new HttpError(400, 'bad_campaign', problem);
+    await limit('campaign', row.wallet, 15, 'The Father has read enough from you today.'); await d.store.hit('campaign', row.wallet);
+    const live = await boards(), board = live[0].filter((x) => x.active || x.budget > 0n).length < 20 ? 0 : 1; return { tx: await cosign(s, [ix.createCampaign(row.wallet, s, oracle().address, board, n)]) };
+  });
+  /** the player opens a social or project task: the visit starts */
+  app.post('/campaigns/:id/start', async (q) => { const row = await me(q), id = Number((q.params as any).id); if (opened.size > 20_000) opened.clear(); opened.set(`${id}:${row.wallet}`, Date.now()); return { visit_s: VISIT_S }; });
+  app.post('/campaigns/:id/claim', async (q) => {
+    const row = await me(q), id = Number((q.params as any).id), s = wallet((q.body as any)?.session); const c = (await boards()).flat().find((x) => x.id === id);
+    if (!c || !c.active) throw new HttpError(404, 'CampaignClosed', 'That campaign has ended.'); if (c.kind === 2) throw new HttpError(400, 'bad_args', 'Machine campaigns are checked on chain.');
+    const acct = await d.er.account(addr.player(row.wallet)), p = acct && decodePlayer(acct.data); if (p && hasClaimed(p, id)) throw new HttpError(409, 'AlreadyClaimed', 'You already claimed this one.');
+    const at = opened.get(`${id}:${row.wallet}`), waited = at ? (Date.now() - at) / 1000 : 0; if (!at) throw new HttpError(400, 'not_done', 'Open the task first.'); if (waited < VISIT_S) throw new HttpError(400, 'not_done', `Give it ${Math.ceil(VISIT_S - waited)} more seconds.`);
+    await limit('attest', row.wallet, 40, 'The Church needs a rest. Try again tomorrow.'); await d.store.hit('attest', row.wallet);
+    return { tx: await cosign(s, [ix.claimCampaign(row.wallet, s, id, oracle().address)]) };
+  });
+  /** names for wallets on screen (plot owners, campaign creators) */
+  app.get('/who', async (q) => { const out: Record<string, string> = {}; for (const w of String((q.query as any).wallets ?? '').split(',').slice(0, 30)) { const r = w && await d.store.byWallet(w); if (r && r.name) out[w] = r.name; } return { names: out }; });
   /** who called what, with names. The rounds and their totals come from the chain itself */
   let crowd = new Map<string, { at: number; body: unknown }>();
   app.get('/market/crowd', async (q) => {
