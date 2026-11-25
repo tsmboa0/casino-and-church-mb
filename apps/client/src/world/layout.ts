@@ -291,7 +291,7 @@ export function buildWorld(sizes: Sizes): World {
 
   // ---- THE BTC EXCHANGE (west pit, across the boulevard from Fortuna's office): a marble trading floor, a giant
   //      candlestick ticker wall (the live BTC price runs on its marquee), the bull and the bear, green/red/cyan neon.
-  //      One-minute UP/DOWN rounds priced by the OutLayer TEE oracle (contracts/realm/src/market.rs).
+  //      One-minute UP/DOWN rounds priced by an oracle on the rollup (onchain market.rs).
   fblock('cf', 21, 0, 12, 9, 7);
   P('x/tradewall', 0, 15, { dx: 6, solid: { x: 2, y: 44, w: 124, h: 20 } });
   P('x/bull', 1, 18, { dx: -4, solid: { x: 2, y: 12, w: 20, h: 12 } });

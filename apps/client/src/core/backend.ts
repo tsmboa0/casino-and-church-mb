@@ -51,7 +51,7 @@ export interface HouseStats { playersOnline: number; inCasino: number; inChurch:
 export interface ChurchStats { treasury: number; tithes24h: number; candles24h: number; alms24h: number; blessingsPaid24h: number;
   blessingCapBps: number; candleFaithMilli: number; faithfulOnline: number }
 export interface LbRow { rank: number; name: string; wagered: number; net: number; you?: boolean }
-// ---- the BTC UP/DOWN market: one-minute rounds, priced by an OutLayer TEE oracle (contracts/realm/src/market.rs) ----
+// ---- the BTC UP/DOWN market: one-minute rounds, run by a crank and priced by an oracle on the rollup (onchain market.rs) ----
 export type MarketSide = 'up' | 'down';
 export type MarketOutcome = '' | 'up' | 'down' | 'tie' | 'void';
 export interface MarketRound {
@@ -81,8 +81,10 @@ export interface MarketState {
 }
 export interface MarketResult {
   betId: number; side: MarketSide; outcome: Exclude<MarketOutcome, ''>; wager: number; payout: number; blessing: number;
-  lockPrice: number | null; closePrice: number | null; luckGain: number;
+  lockPrice: number | null; closePrice: number | null; luckGain: number; epoch?: number; roundTx?: string;
 }
+/** a finished round for the PAST ROUNDS list. `tx`: the transaction that closed it; `page`: the record on Solana L1 */
+export interface PastRound { epoch: number; outcome: Exclude<MarketOutcome, ''>; lock: number; close: number; closedAt: number; up: number; down: number; bets: number; tx: string | null; page: string | null }
 export interface Backend {
   readonly mode: 'mock' | 'chain';
   placeBet(r: BetReq): Promise<BetResult>;                       // resolves when the bet is SETTLED (reveal done)
@@ -155,6 +157,10 @@ export interface Backend {
   market?(): Promise<MarketState>;
   /** bet on the OPEN round `epoch`; resolves once the bet is on chain (the result comes when the round closes) */
   marketBet?(epoch: number, side: MarketSide, chips: number): Promise<{ betId: number; tx?: string }>;
+  /** finished rounds, newest first; `before` an epoch for older ones */
+  pastRounds?(before?: number): Promise<PastRound[]>;
+  /** link to an L1 transaction */
+  l1Url?(sig: string): string;
   /** a settled market bet, or null while its round is still running */
   marketResult?(betId: number): Promise<MarketResult | null>;
 }

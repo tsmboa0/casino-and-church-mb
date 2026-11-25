@@ -316,6 +316,78 @@ pub struct Player {
     pub spare: [u8; 80],
 }
 
+/// a round that is taking bets, or being decided
+#[zero_copy]
+#[repr(C)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct LiveRound {
+    pub epoch: u64,
+    pub open_ts: i64,
+    /// betting closes here, and the price that locks the round must be from this second or later
+    pub lock_ts: i64,
+    pub locked_at: i64,
+    /// lamports on each side
+    pub up: u64,
+    pub down: u64,
+    pub bets: u32,
+    /// US cents
+    pub lock_c: u32,
+}
+
+/// a finished round, in full
+#[zero_copy]
+#[repr(C)]
+#[derive(Debug, PartialEq, Eq)]
+pub struct RoundRec {
+    pub epoch: u32,
+    pub lock_c: u32,
+    pub close_c: u32,
+    pub closed_ts: u32,
+    pub up_chips: u32,
+    pub down_chips: u32,
+    pub bets: u16,
+    /// 1 up, 2 down, 3 tie, 4 void
+    pub outcome: u8,
+    /// seconds after the minute was up
+    pub late_s: u8,
+}
+pub const RING: u64 = 240;
+pub const ARCHIVE_ROUNDS: u64 = 10_080;
+
+#[account(zero_copy)]
+#[repr(C)]
+pub struct Market {
+    pub open: LiveRound,
+    /// epoch 0 = none
+    pub live: LiveRound,
+    pub round_s: u32,
+    pub grace_s: u32,
+    pub payout_bps: u32,
+    /// commits since the last delegation
+    pub commits: u32,
+    pub wagers: [u32; 8],
+    pub closed: u64,
+    pub voided: u64,
+    pub crank_ticks: u64,
+    pub keeper_prices: u64,
+    pub last_tick_ts: i64,
+    pub last_price_ts: i64,
+    pub last_price_c: u32,
+    pub max_gap_s: u32,
+    pub enabled: u8,
+    pub bump: u8,
+    pub version: u8,
+    pub _pad: [u8; 5],
+    pub spare: [u8; 120],
+    /// the last 240 rounds (4 hours), by epoch % 240
+    pub rounds: [RoundRec; 240],
+    /// 2 bits a round for a week, by epoch % 10,080: 1 up, 2 down, 3 bet returned
+    pub archive: [u8; 2_520],
+}
+impl Market {
+    pub const SPACE: usize = 8 + std::mem::size_of::<Market>();
+}
+
 impl Player {
     pub const SPACE: usize = 8 + std::mem::size_of::<Player>();
     /// a VRF answer is on its way (or a blackjack hand is open)
@@ -339,6 +411,9 @@ mod tests {
         assert_eq!(std::mem::size_of::<BtcSlot>(), 32);
         assert_eq!(std::mem::size_of::<BetResult>(), 40);
         assert_eq!(Player::SPACE, 8 + 1168);
+        assert_eq!((std::mem::size_of::<LiveRound>(), std::mem::size_of::<RoundRec>()), (56, 28));
+        assert_eq!(Market::SPACE, 8 + 344 + 240 * 28 + 2_520);
+        assert!(Market::SPACE <= MAX_COMMITTABLE);
         // the rollup refuses to commit anything bigger
         assert!(Player::SPACE <= MAX_COMMITTABLE && House::SPACE <= MAX_COMMITTABLE);
     }

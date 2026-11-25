@@ -6,3 +6,5 @@ resolver = "2"
 overflow-checks = true
 lto = "fat"
 codegen-units = 1
+# 860 KB with the default, 748 KB with this; the account holds 900 KB
+opt-level = "s"

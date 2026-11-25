@@ -1,6 +1,8 @@
 //! The Casino & The Church. SOL stays on L1 (Bank, Purse); play happens on a MagicBlock Ephemeral Rollup (House, Player).
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+use anchor_lang::solana_program::program::invoke_signed;
 use anchor_lang::Discriminator;
 use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral, vrf};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
@@ -10,18 +12,21 @@ use ephemeral_rollups_sdk::vrf::instructions::{create_request_randomness_ix_cons
 use ephemeral_rollups_sdk::vrf::types::SerializableAccountMeta;
 use ephemeral_rollups_sdk::{ActionArgs, ShortAccountMeta};
 use session_keys::SessionTokenV2;
+use solana_instructions_sysvar::{load_current_index_checked, load_instruction_at_checked};
 
 pub mod bets;
 pub mod blackjack;
 pub mod constants;
 pub mod error;
 pub mod games;
+pub mod market;
 pub mod money;
 pub mod state;
 
 use bets::BetError;
 use constants::*;
 use error::RealmError;
+use market::{MarketError, Tick};
 use money::MoneyError;
 use state::*;
 
@@ -56,6 +61,24 @@ fn bet_ok<T>(r: core::result::Result<T, BetError>) -> Result<T> {
     r.map_err(|e| error!(RealmError::from(e)))
 }
 
+impl From<MarketError> for RealmError {
+    fn from(e: MarketError) -> Self {
+        match e {
+            MarketError::Closed => RealmError::MarketClosed,
+            MarketError::RoundMoved => RealmError::RoundMoved,
+            MarketError::RoundLocked => RealmError::RoundLocked,
+            MarketError::BadPick => RealmError::BadPick,
+            MarketError::BadWager => RealmError::BadWager,
+            MarketError::MaxBet => RealmError::MaxBet,
+            MarketError::AlreadyBet => RealmError::AlreadyBet,
+            MarketError::SlotsFull => RealmError::SlotsFull,
+            MarketError::NoChips => RealmError::NoChips,
+            MarketError::VaultLow => RealmError::VaultLow,
+            MarketError::BadArgs => RealmError::BadArgs,
+            MarketError::Overflow => RealmError::Overflow,
+        }
+    }
+}
 impl From<MoneyError> for RealmError {
     fn from(e: MoneyError) -> Self {
         match e {
@@ -136,6 +159,63 @@ pub mod realm {
             &[SEED_HOUSE],
             DelegateConfig { validator: Some(ctx.accounts.config.er_validator), ..Default::default() },
         )?;
+        Ok(())
+    }
+
+    // ================================================================ L1: the BTC market
+
+    pub fn init_market(ctx: Context<InitMarket>) -> Result<()> {
+        {
+            let mut m = ctx.accounts.market.load_init()?;
+            m.round_s = 60;
+            m.grace_s = 20;
+            m.payout_bps = 19_000;
+            m.wagers = [1, 2, 5, 10, 0, 0, 0, 0];
+            m.bump = ctx.bumps.market;
+            m.version = 1;
+        }
+        // the market pays for its own crank on the rollup (an ephemeral account costs 32 lamports a byte)
+        anchor_lang::system_program::transfer(
+            CpiContext::new(ctx.accounts.system_program.key(), anchor_lang::system_program::Transfer { from: ctx.accounts.admin.to_account_info(), to: ctx.accounts.market.to_account_info() }),
+            5_000_000,
+        )
+    }
+
+    /// First time, or after a rotation. Anyone may pay for it: it can only go to our rollup.
+    pub fn delegate_market(ctx: Context<DelegateMarket>) -> Result<()> {
+        {
+            let info = ctx.accounts.market.to_account_info();
+            require_keys_eq!(*info.owner, crate::ID, RealmError::BadArgs);
+            let mut data = info.try_borrow_mut_data()?;
+            market_check(&data)?;
+            let m: &mut Market = bytemuck::try_from_bytes_mut(&mut data[8..Market::SPACE]).map_err(|_| error!(RealmError::BadArgs))?;
+            m.commits = 0;
+        }
+        ctx.accounts.delegate_market(&ctx.accounts.payer, &[SEED_MARKET], DelegateConfig { validator: Some(ctx.accounts.config.er_validator), ..Default::default() })?;
+        Ok(())
+    }
+
+    /// Writes 60 finished rounds into Solana's own history, from the market as it was last saved. Anyone may call it; it
+    /// reads the saved account, so nobody can make a number up. `page` is epoch / 60, and the `rounds` address only makes
+    /// the record easy to find. Afterwards these lines outlive the rollup's history and our server.
+    pub fn log_rounds(ctx: Context<LogRounds>, page: u32) -> Result<()> {
+        let info = ctx.accounts.market.to_account_info();
+        require!(*info.owner == crate::ID || *info.owner == DELEGATION_PROGRAM, RealmError::BadArgs);
+        let data = info.try_borrow_data()?;
+        market_check(&data)?;
+        let m: &Market = bytemuck::try_from_bytes(&data[8..Market::SPACE]).map_err(|_| error!(RealmError::BadArgs))?;
+        let from = u64::from(page) * 60;
+        // a page is written once it is whole, so an early call cannot pass off a part of it as the record
+        require!(market::outcome_at(m, from + 59).is_some(), RealmError::TooEarly);
+        let mut n = 0;
+        for e in from..from + 60 {
+            let r = &m.rounds[(e % RING) as usize];
+            if e != 0 && u64::from(r.epoch) == e {
+                anchor_lang::solana_program::log::sol_log(&market::line(r));
+                n += 1;
+            }
+        }
+        require!(n > 0, RealmError::NothingPending);
         Ok(())
     }
 
@@ -409,6 +489,151 @@ pub mod realm {
         Ok(())
     }
 
+    // ================================================================ rollup: the BTC market
+
+    pub fn market_start(ctx: Context<AdminMarket>) -> Result<()> {
+        let mut m = ctx.accounts.market.load_mut()?;
+        market::start(&mut m, Clock::get()?.unix_timestamp);
+        Ok(())
+    }
+    /// Voids whatever is running, so every bet comes back.
+    pub fn market_stop(ctx: Context<AdminMarket>) -> Result<()> {
+        let mut m = ctx.accounts.market.load_mut()?;
+        if let Some(t) = market::stop(&mut m, Clock::get()?.unix_timestamp) { tell(&t, &m); }
+        Ok(())
+    }
+    /// Only while stopped, so no bet is ever placed under one set of rules and decided under another.
+    pub fn market_config(ctx: Context<AdminMarket>, round_s: u32, grace_s: u32, payout_bps: u32, wagers: [u32; 8]) -> Result<()> {
+        let mut m = ctx.accounts.market.load_mut()?;
+        require!(m.enabled == 0, RealmError::BadArgs);
+        require!((30..=900).contains(&round_s) && (10..=120).contains(&grace_s) && (10_000..=19_800).contains(&payout_bps) && wagers.iter().any(|w| *w > 0), RealmError::BadArgs);
+        m.round_s = round_s;
+        m.grace_s = grace_s;
+        m.payout_bps = payout_bps;
+        m.wagers = wagers;
+        Ok(())
+    }
+
+    /// A Hydra crank that calls `market_tick` for ever. It is made by the market's own address, which proves whose it is.
+    /// It only counts once its address is in Config.
+    pub fn market_crank_create(ctx: Context<MarketCrank>, seed: [u8; 32], interval_slots: u64) -> Result<()> {
+        let a = &ctx.accounts;
+        let tick = Instruction {
+            program_id: crate::ID,
+            accounts: vec![
+                AccountMeta::new(a.market.key(), false),
+                AccountMeta::new_readonly(a.house.key(), false),
+                AccountMeta::new_readonly(a.config.key(), false),
+                AccountMeta::new_readonly(a.config.btc_feed, false),
+                AccountMeta::new_readonly(INSTRUCTIONS_SYSVAR, false),
+                AccountMeta::new_readonly(crate::ID, false), // no keeper
+            ],
+            data: anchor_lang::InstructionData::data(&crate::instruction::MarketTick {}),
+        };
+        let mut d = vec![0u8];
+        d.extend_from_slice(&seed);
+        d.extend_from_slice(a.market.key().as_ref());
+        d.extend_from_slice(&Clock::get()?.slot.to_le_bytes()); // from now: 0 would make Hydra catch up from slot 0
+        d.extend_from_slice(&interval_slots.to_le_bytes());
+        d.extend_from_slice(&0u64.to_le_bytes()); // for ever
+        d.extend_from_slice(&0u64.to_le_bytes()); // no tip
+        d.extend_from_slice(&0u32.to_le_bytes());
+        d.push(tick.accounts.len() as u8);
+        d.extend_from_slice(&(tick.data.len() as u16).to_le_bytes());
+        d.extend_from_slice(tick.program_id.as_ref());
+        for m in &tick.accounts {
+            d.push(if m.is_writable { 2 } else { 0 });
+            d.extend_from_slice(m.pubkey.as_ref());
+        }
+        d.extend_from_slice(&tick.data);
+        let ix = Instruction {
+            program_id: HYDRA,
+            accounts: vec![AccountMeta::new(a.market.key(), true), AccountMeta::new(a.crank.key(), false), AccountMeta::new(EPHEMERAL_VAULT, false), AccountMeta::new_readonly(MAGIC_PROGRAM, false)],
+            data: d,
+        };
+        invoke_signed(&ix, &[a.market.to_account_info(), a.crank.to_account_info(), a.ephemeral_vault.to_account_info(), a.magic_program.to_account_info(), a.hydra.to_account_info()], &[&[SEED_MARKET, &[ctx.bumps.market]]])?;
+        Ok(())
+    }
+    pub fn market_crank_cancel(ctx: Context<MarketCrank>) -> Result<()> {
+        let a = &ctx.accounts;
+        let ix = Instruction {
+            program_id: HYDRA,
+            accounts: vec![AccountMeta::new(a.market.key(), true), AccountMeta::new(a.crank.key(), false), AccountMeta::new(a.market.key(), false), AccountMeta::new(EPHEMERAL_VAULT, false), AccountMeta::new_readonly(MAGIC_PROGRAM, false)],
+            data: vec![2],
+        };
+        invoke_signed(&ix, &[a.market.to_account_info(), a.crank.to_account_info(), a.ephemeral_vault.to_account_info(), a.magic_program.to_account_info(), a.hydra.to_account_info()], &[&[SEED_MARKET, &[ctx.bumps.market]]])?;
+        Ok(())
+    }
+
+    /// Called about once a second by the crank. Most calls end at once. The first call that is due takes the price, so only
+    /// the crank or the keeper may make it; when the grace is over anyone may, and then it can only void.
+    pub fn market_tick(ctx: Context<MarketTick>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let a = &ctx.accounts;
+        let crank = is_crank(&a.instructions, &a.config.market_crank)?;
+        let keeper = a.keeper.as_ref().is_some_and(|k| k.key() == a.config.keeper);
+        let mut m = a.market.load_mut()?;
+        if crank {
+            if m.last_tick_ts > 0 { m.max_gap_s = m.max_gap_s.max((now - m.last_tick_ts).clamp(0, i64::from(u32::MAX)) as u32); }
+            m.last_tick_ts = now;
+            m.crank_ticks += 1;
+        }
+        if a.house.load()?.paused != 0 { return Ok(()); }
+        let price = {
+            require_keys_eq!(*a.feed.owner, PRICE_PROGRAM, RealmError::BadFeed);
+            market::read_feed(&a.feed.try_borrow_data()?)
+        };
+        let t = market::tick(&mut m, price, crank || keeper, now);
+        require!(t != Tick::NotAllowed, RealmError::NotAllowed);
+        if keeper && !crank && matches!(t, Tick::Priced { .. }) { m.keeper_prices += 1; }
+        tell(&t, &m);
+        Ok(())
+    }
+
+    pub fn market_bet(ctx: Context<MarketBet>, epoch: u64, side: u8, chips: u64) -> Result<()> {
+        let a = &ctx.accounts;
+        authorize(&a.signer.key(), &a.authority.key(), a.session_token.as_ref())?;
+        let now = Clock::get()?.unix_timestamp;
+        let mut p = a.player.load_mut()?;
+        let mut h = a.house.load_mut()?;
+        let mut m = a.market.load_mut()?;
+        touch(&mut p, &mut h, &a.purse)?;
+        pay_claims(&mut p, &mut h, &m, now);
+        let seq = market::bet(&mut p, &mut h, &mut m, epoch, side, chips, now).map_err(|e| error!(RealmError::from(e)))?;
+        emit!(MarketBetPlaced { wallet: p.authority, seq, epoch, side, wager: chips * CHIP });
+        Ok(())
+    }
+
+    /// Settles every bet of this player whose round is over. Anyone may call it; it only ever pays the bettor.
+    pub fn market_claim(ctx: Context<MarketClaim>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let mut p = ctx.accounts.player.load_mut()?;
+        let mut h = ctx.accounts.house.load_mut()?;
+        let m = ctx.accounts.market.load()?;
+        let (per_min, window) = (h.params.decay_per_min_milli, h.params.max_decay_window_s);
+        money::decay(&mut p, now, per_min, window);
+        pay_claims(&mut p, &mut h, &m, now);
+        Ok(())
+    }
+
+    /// Saves the market to L1 (the keeper, hourly). An account has 10 saves per delegation, so the ninth also takes it off
+    /// the rollup, to be put straight back: that is only allowed early in a round, when nothing is due for a while.
+    pub fn market_checkpoint(ctx: Context<MarketCheckpoint>) -> Result<()> {
+        let a = &ctx.accounts;
+        require!(a.signer.key() == a.config.keeper || a.signer.key() == a.config.admin, RealmError::NotAllowed);
+        let leave = {
+            let mut m = a.market.load_mut()?;
+            m.commits += 1;
+            let leave = m.commits >= MARKET_ROTATE_AT;
+            require!(!leave || m.enabled == 0 || Clock::get()?.unix_timestamp <= m.open.open_ts + 12, RealmError::TooEarly);
+            leave
+        };
+        let market = [a.market.to_account_info()];
+        let intent = MagicIntentBundleBuilder::new(a.signer.to_account_info(), a.magic_context.to_account_info(), a.magic_program.to_account_info());
+        if leave { intent.commit_and_undelegate(&market).build_and_invoke()?; } else { intent.commit(&market).build_and_invoke()?; }
+        Ok(())
+    }
+
     // ================================================================ rollup: the player's own things
 
     pub fn set_profile(ctx: Context<Play>, name: String, avatar: String) -> Result<()> {
@@ -477,7 +702,7 @@ fn touch(p: &mut Player, h: &mut House, purse: &Purse) -> Result<()> {
 }
 
 /// The request every bet makes. The answer can only come back to `callback`, with this player and the house.
-fn ask_oracle(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pubkey, callback: &[u8], caller_seed: [u8; 32], args: Vec<u8>) -> anchor_lang::solana_program::instruction::Instruction {
+fn ask_oracle(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pubkey, callback: &[u8], caller_seed: [u8; 32], args: Vec<u8>) -> Instruction {
     let meta = |k: Pubkey| SerializableAccountMeta { pubkey: k, is_signer: false, is_writable: true };
     create_request_randomness_ix_const(
         RequestRandomnessParams {
@@ -493,12 +718,48 @@ fn ask_oracle(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pubkey
         PROGRAM_IDENTITY,
     )
 }
-fn ask_for_cards(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pubkey, client_seed: &[u8; 32], seq: u64, step: u8) -> anchor_lang::solana_program::instruction::Instruction {
+fn ask_for_cards(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pubkey, client_seed: &[u8; 32], seq: u64, step: u8) -> Instruction {
     let mut seed = bets::caller_seed(client_seed, &player.to_bytes(), seq);
     seed[8] ^= step; // every step of a hand asks with a different seed
     let mut args = seq.to_le_bytes().to_vec();
     args.push(step);
     ask_oracle(payer, oracle_queue, player, house, instruction::BjSettle::DISCRIMINATOR, seed, args)
+}
+
+/// what a tick did, as events and as plain text for explorers
+fn tell(t: &Tick, m: &Market) {
+    let mut say = |r: &RoundRec| {
+        anchor_lang::solana_program::log::sol_log(&market::line(r));
+        emit!(RoundClosed { epoch: u64::from(r.epoch), outcome: r.outcome, lock_c: r.lock_c, close_c: r.close_c, closed_ts: r.closed_ts, up_chips: r.up_chips, down_chips: r.down_chips, bets: r.bets });
+    };
+    match t {
+        Tick::Voided { live, open } => {
+            if let Some(r) = live { say(r); }
+            say(open);
+        }
+        Tick::Priced { closed, locked, price_c } => {
+            if let Some(r) = closed { say(r); }
+            msg!("round {} locked at {}.{:02}, round {} open", locked, price_c / 100, price_c % 100, m.open.epoch);
+            emit!(RoundLocked { epoch: *locked, lock_c: *price_c, locked_ts: m.live.locked_at, next_lock_ts: m.open.lock_ts });
+        }
+        _ => {}
+    }
+}
+fn pay_claims(p: &mut Player, h: &mut House, m: &Market, now: i64) {
+    for c in market::claim(p, h, m, now) {
+        emit!(MarketSettled { wallet: p.authority, seq: c.seq, epoch: c.epoch, side: c.side, outcome: c.outcome, wager: c.wager, payout: c.payout, blessing: c.blessing, luck_gain_milli: c.luck_gain_milli, lock_c: c.lock_c, close_c: c.close_c });
+    }
+}
+fn market_check(data: &[u8]) -> Result<()> {
+    require!(data.len() >= Market::SPACE && data[..8] == *<Market as anchor_lang::Discriminator>::DISCRIMINATOR, RealmError::BadArgs);
+    Ok(())
+}
+/// the instruction before ours must be Hydra's Trigger, for exactly this crank
+fn is_crank(instructions: &AccountInfo, expected: &Pubkey) -> Result<bool> {
+    let k = load_current_index_checked(instructions)? as usize;
+    if k == 0 { return Ok(false); }
+    let prev = load_instruction_at_checked(k - 1, instructions)?;
+    Ok(*expected != Pubkey::default() && prev.program_id == HYDRA && prev.data.first() == Some(&1) && prev.accounts.first().is_some_and(|a| a.pubkey == *expected))
 }
 
 fn pay_into_bank<'info>(from: &Signer<'info>, bank: &Account<'info, Bank>, system: &Program<'info, System>, lamports: u64) -> Result<()> {
@@ -585,6 +846,14 @@ pub struct BetPlaced { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick:
 pub struct BetSettled { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick: u8, pub wager: u64, pub payout: u64, pub blessing: u64, pub luck_gain_milli: u32, pub outcome: [u8; 4], pub jackpot: bool, pub randomness: [u8; 32] }
 #[event]
 pub struct HandStep { pub wallet: Pubkey, pub seq: u64, pub step: u8, pub action: u8, pub player: [u8; 12], pub n_player: u8, pub dealer: [u8; 12], pub n_dealer: u8, pub randomness: [u8; 32] }
+#[event]
+pub struct MarketBetPlaced { pub wallet: Pubkey, pub seq: u64, pub epoch: u64, pub side: u8, pub wager: u64 }
+#[event]
+pub struct MarketSettled { pub wallet: Pubkey, pub seq: u64, pub epoch: u64, pub side: u8, pub outcome: u8, pub wager: u64, pub payout: u64, pub blessing: u64, pub luck_gain_milli: u32, pub lock_c: u32, pub close_c: u32 }
+#[event]
+pub struct RoundLocked { pub epoch: u64, pub lock_c: u32, pub locked_ts: i64, pub next_lock_ts: i64 }
+#[event]
+pub struct RoundClosed { pub epoch: u64, pub outcome: u8, pub lock_c: u32, pub close_c: u32, pub closed_ts: u32, pub up_chips: u32, pub down_chips: u32, pub bets: u16 }
 #[event]
 pub struct BetRefunded { pub wallet: Pubkey, pub seq: u64, pub wager: u64 }
 #[event]
@@ -863,4 +1132,128 @@ pub struct AdminHouse<'info> {
     pub config: Box<Account<'info, Config>>,
     #[account(mut, seeds = [SEED_HOUSE], bump)]
     pub house: AccountLoader<'info, House>,
+}
+
+#[derive(Accounts)]
+pub struct InitMarket<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump, has_one = admin @ RealmError::NotAllowed)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(init, payer = admin, space = Market::SPACE, seeds = [SEED_MARKET], bump)]
+    pub market: AccountLoader<'info, Market>,
+    pub system_program: Program<'info, System>,
+}
+
+#[delegate]
+#[derive(Accounts)]
+pub struct DelegateMarket<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    /// CHECK: our PDA; owner and discriminator are checked in the handler
+    #[account(mut, del, seeds = [SEED_MARKET], bump)]
+    pub market: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(page: u32)]
+pub struct LogRounds<'info> {
+    /// CHECK: owner and discriminator are checked in the handler
+    #[account(seeds = [SEED_MARKET], bump)]
+    pub market: UncheckedAccount<'info>,
+    /// CHECK: an empty address; it only makes the record easy to find
+    #[account(seeds = [SEED_ROUNDS, page.to_le_bytes().as_ref()], bump)]
+    pub rounds: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct AdminMarket<'info> {
+    pub admin: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump, has_one = admin @ RealmError::NotAllowed)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(mut, seeds = [SEED_MARKET], bump)]
+    pub market: AccountLoader<'info, Market>,
+}
+
+#[derive(Accounts)]
+pub struct MarketCrank<'info> {
+    pub admin: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump, has_one = admin @ RealmError::NotAllowed)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(mut, seeds = [SEED_MARKET], bump)]
+    pub market: AccountLoader<'info, Market>,
+    /// CHECK: only its key is used
+    #[account(seeds = [SEED_HOUSE], bump)]
+    pub house: UncheckedAccount<'info>,
+    /// CHECK: Hydra derives and checks it
+    #[account(mut)]
+    pub crank: UncheckedAccount<'info>,
+    /// CHECK: fixed address
+    #[account(mut, address = EPHEMERAL_VAULT)]
+    pub ephemeral_vault: UncheckedAccount<'info>,
+    /// CHECK: fixed address
+    #[account(address = MAGIC_PROGRAM)]
+    pub magic_program: UncheckedAccount<'info>,
+    /// CHECK: fixed address
+    #[account(address = HYDRA)]
+    pub hydra: UncheckedAccount<'info>,
+}
+
+/// The order matters: `market_crank_create` lists the same six accounts for the crank.
+#[derive(Accounts)]
+pub struct MarketTick<'info> {
+    #[account(mut, seeds = [SEED_MARKET], bump)]
+    pub market: AccountLoader<'info, Market>,
+    #[account(seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    /// CHECK: address pinned here, owner and layout checked in the handler
+    #[account(address = config.btc_feed @ RealmError::BadFeed)]
+    pub feed: UncheckedAccount<'info>,
+    /// CHECK: the instructions sysvar
+    #[account(address = INSTRUCTIONS_SYSVAR)]
+    pub instructions: UncheckedAccount<'info>,
+    pub keeper: Option<Signer<'info>>,
+}
+
+#[derive(Accounts)]
+pub struct MarketBet<'info> {
+    pub signer: Signer<'info>,
+    /// CHECK: whose player this is; proven by `authorize`
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(seeds = [SEED_PURSE, authority.key().as_ref()], bump = purse.bump)]
+    pub purse: Account<'info, Purse>,
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
+    #[account(mut, seeds = [SEED_MARKET], bump)]
+    pub market: AccountLoader<'info, Market>,
+}
+
+#[derive(Accounts)]
+pub struct MarketClaim<'info> {
+    /// CHECK: only seeds the PDA
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(seeds = [SEED_MARKET], bump)]
+    pub market: AccountLoader<'info, Market>,
+}
+
+#[commit]
+#[derive(Accounts)]
+pub struct MarketCheckpoint<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(mut, seeds = [SEED_MARKET], bump)]
+    pub market: AccountLoader<'info, Market>,
 }

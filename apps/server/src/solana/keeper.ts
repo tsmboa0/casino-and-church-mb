@@ -1,5 +1,7 @@
 import { addr, buildTx, compileMessage, decodeBank, decodeHouse, decodePlayer, decodePurse, ix, P, REALM, type Ix, type Rpc, type Signer } from '@cnc/realm';
 
+import type { MarketKeeper } from './market.ts';
+
 export interface Books { ok: boolean; at: number; problems: string[] }
 /**
  * Tidies up after everyone. It holds no authority over money: every instruction here may be called by anyone, and pays
@@ -9,7 +11,7 @@ export class Keeper {
   status = { running: false, at: 0, synced: 0, paid: 0, redelegated: 0, refunded: 0, stood: 0, errors: 0, lastError: null as string | null };
   books: Books = { ok: true, at: 0, problems: [] };
   private timer: NodeJS.Timeout | null = null; private round = 0;
-  constructor(private l1: Rpc, private er: Rpc, private key: Signer, private sponsor: Signer, private wallets: () => Promise<string[]>, private everyMs = 20_000) {}
+  constructor(private l1: Rpc, private er: Rpc, private key: Signer, private sponsor: Signer, private wallets: () => Promise<string[]>, private everyMs = 20_000, private market: MarketKeeper | null = null) {}
   start() { this.status.running = true; const go = async () => { await this.tick(); if (this.status.running) this.timer = setTimeout(go, this.everyMs); }; this.timer = setTimeout(go, 2_000); }
   stop() { this.status.running = false; if (this.timer) clearTimeout(this.timer); }
   private async send(rpc: Rpc, ixs: Ix[], signer: Signer) { return rpc.send(buildTx(compileMessage(signer.address, ixs, await rpc.blockhash()), [signer])); }
@@ -29,6 +31,7 @@ export class Keeper {
           if (l1p[i]!.owner === REALM) { await this.send(this.l1, [ix.delegatePlayer(this.sponsor.address, ws[i])], this.sponsor); this.status.redelegated++; }   // rotated off at the commit cap
           else if (live && live.credited < pu.deposited) { await this.send(this.er, [ix.syncDeposit(ws[i])], this.key); this.status.synced++; }
           if (live?.pending && Date.now() / 1000 > live.pending.placedTs + 185) { await this.send(this.er, [ix.refundStale(ws[i])], this.key); this.status.refunded++; }   // the oracle never answered
+          if (live && this.market) await this.market.sweep(ws[i], live);
           const hand = live?.hand, idle = hand && !hand.over ? Date.now() / 1000 - hand.lastTs : 0;
           if (hand && hand.awaiting && idle > 185) { await this.send(this.er, [ix.refundStale(ws[i])], this.key); this.status.refunded++; }
           else if (hand && !hand.over && !hand.awaiting && idle > 125) { await this.send(this.er, [ix.bjStandIdle(ws[i], this.key.address)], this.key); this.status.stood++; }   // walked away from the table

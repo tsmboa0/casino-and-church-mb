@@ -1,0 +1,154 @@
+{
+ "at": "2026-11-25T15:35:55.439Z",
+ "checks": {
+  "UP and DOWN totals on chain": {
+   "pass": true,
+   "info": ""
+  },
+  "16 bets over 4 rounds paid what the prices say": {
+   "pass": true,
+   "info": {
+    "tally": {
+     "up": 12,
+     "down": 4
+    },
+    "medianBetMs": 1354
+   }
+  },
+  "rounds were on time": {
+   "pass": true,
+   "info": [
+    {
+     "n": 7,
+     "o": "up",
+     "late": 0,
+     "up": 6,
+     "down": 12,
+     "bets": 4
+    },
+    {
+     "n": 6,
+     "o": "down",
+     "late": 0,
+     "up": 7,
+     "down": 12,
+     "bets": 5
+    },
+    {
+     "n": 5,
+     "o": "up",
+     "late": 0,
+     "up": 6,
+     "down": 12,
+     "bets": 4
+    },
+    {
+     "n": 4,
+     "o": "up",
+     "late": 0,
+     "up": 6,
+     "down": 12,
+     "bets": 4
+    }
+   ]
+  },
+  "nothing left unsettled": {
+   "pass": true,
+   "info": ""
+  },
+  "books balanced": {
+   "pass": true,
+   "info": ""
+  },
+  "priced by the crank, through Hydra": {
+   "pass": true,
+   "info": ""
+  },
+  "the close is readable in an explorer": {
+   "pass": true,
+   "info": {
+    "text": "Program log: round 7 UP lock 57926.70 close 58057.41 up 6 down 12 bets 4 at 1795620806",
+    "cu": 19157
+   }
+  },
+  "a second bet on the same round": {
+   "pass": true,
+   "info": "AlreadyBet"
+  },
+  "a round that is not open": {
+   "pass": true,
+   "info": "RoundMoved"
+  },
+  "the live round": {
+   "pass": true,
+   "info": "RoundMoved"
+  },
+  "a side that does not exist": {
+   "pass": true,
+   "info": "BadPick"
+  },
+  "a bet not offered": {
+   "pass": true,
+   "info": "BadWager"
+  },
+  "a stranger betting your chips": {
+   "pass": true,
+   "info": "BadSession"
+  },
+  "a stranger’s early tick changes nothing": {
+   "pass": true,
+   "info": ""
+  },
+  "a stranger as keeper, not due": {
+   "pass": true,
+   "info": "no effect"
+  },
+  "stopping the market without being admin": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "making a crank without being admin": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "saving the market without being keeper": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "changing the rules while it runs": {
+   "pass": true,
+   "info": "BadArgs"
+  },
+  "a fake price feed": {
+   "pass": true,
+   "info": "BadFeed"
+  },
+  "claiming a running round does nothing": {
+   "pass": true,
+   "info": ""
+  },
+  "a coin flip works while a BTC bet is open": {
+   "pass": true,
+   "info": ""
+  },
+  "strangers at the due second move nothing": {
+   "pass": true,
+   "info": {
+    "ok": 10,
+    "NotAllowed": 1
+   }
+  },
+  "settled": {
+   "pass": true,
+   "info": {
+    "byServer": false
+   }
+  },
+  "final books": {
+   "pass": true,
+   "info": {
+    "reserved": 0
+   }
+  }
+ }
+}

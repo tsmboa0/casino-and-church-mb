@@ -1,20 +1,21 @@
-import { addSignatures, addr, b64decode, b64encode, BJ, BJ_LABELS, buildTx, ChainError, CHIP, CHIPS_PER_SOL, compileMessage, GAME, GAME_NAMES, decodeHouse, decodePlayer, decodePurse, ix, REALM, Rpc, type BetResultState, type HandState, type Ix, type PlayerState } from '@cnc/realm';
+import { addSignatures, addr, b64decode, b64encode, BJ, BJ_LABELS, buildTx, decodeFeed, decodeMarket, MARKET_HEAD, OUTCOMES, P, ChainError, CHIP, CHIPS_PER_SOL, compileMessage, GAME, GAME_NAMES, decodeHouse, decodePlayer, decodePurse, ix, REALM, Rpc, type BetResultState, type HandState, type Ix, type MarketState as ChainMarket, type PlayerState, type RoundRecState, type RoundState } from '@cnc/realm';
 import { cleanName, nameProblem } from '@cnc/shared';
 import { BackendError } from '../core/errors';
-import type { Backend, BetProof, BetReq, BetResult, BjState, LbRow, WheelResult } from '../core/backend';
+import type { Backend, BetProof, BetReq, BetResult, BjState, LbRow, MarketCrowdBet, MarketResult, MarketRound, MarketSide, MarketState, PastRound, WheelResult } from '../core/backend';
 import { bus } from '../core/bus';
 import { cardName, handTotal, PARAMS, QUESTS, setTableBets, SLOT_SYMS } from '../core/rules';
 import { store, type HistRow, type Plot } from '../core/state';
 import { ER_RPC, L1_RPC, loadWallet } from '../wallet';
 import { rollupBanner } from './banner';
-import { erTx } from './explorer';
+import { erTx, l1Tx } from './explorer';
 import { checkBet } from './verify';
 import { dropSession, freshSession, loadSession, saveSession } from './session';
 
 const SAY: Record<string, string> = {
   Paused: 'The game is paused for a moment. Your chips are safe.', DepositsPaused: 'Buying chips is paused for a moment.', PayoutsPaused: 'Payouts are paused for a moment. Your SOL is safe.',
   BadAmount: 'That amount is not allowed.', NoChips: 'Not enough chips. Visit the Cashier.', VaultLow: 'The house cannot cover that right now.', AlreadyClaimed: 'Already claimed.', BetPending: 'Finish your open bet first.',
-  BadPick: 'Pick something first.', BadWager: 'That bet is not offered at this table.', MaxBet: 'That is above the table limit right now.', NoHand: 'That hand is over.', CannotDouble: 'You can only double on your first two cards.', LuckLow: 'Not enough LUCK yet.', FaithLow: 'Not enough FAITH yet.',
+  BadPick: 'Pick something first.', BadWager: 'That bet is not offered at this table.', MaxBet: 'That is above the table limit right now.', MarketClosed: 'The BTC exchange is closed for a moment.', RoundMoved: 'That round has just closed. Try the next one.', RoundLocked: 'Betting on that round has closed. Try the next one.', AlreadyBet: 'You already have a bet on this round.', SlotsFull: 'Too many bets are still being settled. One moment.',
+  NoHand: 'That hand is over.', CannotDouble: 'You can only double on your first two cards.', LuckLow: 'Not enough LUCK yet.', FaithLow: 'Not enough FAITH yet.',
   BadSession: 'Your session ended. Sign in again to keep playing.', Cooldown: 'Too soon. Wait a moment.', BadName: 'That name is not allowed.', rollup_down: 'The rollup is updating. Your chips are safe. Try again in a minute.', l1_down: 'Solana is not answering. Try again in a moment.',
 };
 const friendly = (e: unknown): BackendError => {
@@ -38,6 +39,7 @@ export class SolanaBackend implements Backend {
   constructor(private api: string) {
     window.setInterval(() => this.fade(), 4000);
     window.setInterval(() => { if (this.me && document.visibilityState === 'visible') void this.poll(); }, 12_000);
+    window.setInterval(() => { if (this.me && this.player?.btc.length) void this.settleBtc(); }, 2_500);
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && this.me) void this.poll(); });
     void this.table();
   }
@@ -46,7 +48,7 @@ export class SolanaBackend implements Backend {
   address() { return this.me; }
   /** signed in with Privy: what does this wallet still need? `setup` opens the account and/or a session (one popup) */
   async attach(wallet: string): Promise<{ ready: boolean; isNew: boolean; name: string | null; avatar: string | null }> {
-    this.me = wallet; this.player = null;
+    this.me = wallet; this.player = null; this.mkMine.clear();
     const [who, acct, sess] = await Promise.all([this.get<{ wallet: string | null; name: string | null; avatar: string | null }>('/me').catch(() => ({ wallet: null, name: null, avatar: null })), this.l1.account(addr.player(wallet)).catch(() => null), loadSession(wallet)]);
     let live = false;
     if (sess && sess.until * 1000 > Date.now() + 60_000) live = !!(await this.l1.account(addr.sessionToken(wallet, sess.signer.address)).catch(() => null));
@@ -182,6 +184,64 @@ export class SolanaBackend implements Backend {
     await this.readPlayer().catch(() => {}); const h = this.player?.hand; if (!h || h.over) return null;
     return h.awaiting ? this.handAt(h.seq, h.dealing ? 0 : h.player.length, h.awaiting !== BJ.hit && !h.dealing) : this.bjState(h);
   }
+  // ---------------------------------------------------------------- the BTC market: read from the rollup, priced by its crank
+  private mk: { head: ChainMarket | null; ring: RoundRecState[]; ringFor: bigint; cents: number | null; at: number; skew: number; crowd: Record<number, MarketCrowdBet[]>; crowdAt: number; links: Map<number, { tx: string | null; page: string | null }> } = { head: null, ring: [], ringFor: 0n, cents: null, at: 0, skew: -Infinity, crowd: {}, crowdAt: 0, links: new Map() };
+  private mkBusy: Promise<void> | null = null; private mkMine = new Map<bigint, bigint>(); private mkClaiming = false;
+  /** one small read (352 bytes of the market, and the oracle's price); the whole account only when a round has ended */
+  private readMarket(maxAgeMs = 700): Promise<void> {
+    if (Date.now() - this.mk.at < maxAgeMs) return Promise.resolve();
+    return (this.mkBusy ??= (async () => {
+      const r = await this.er.call('getMultipleAccounts', [[addr.market(), P.btcFeed], { encoding: 'base64', commitment: 'confirmed', dataSlice: { offset: 0, length: MARKET_HEAD } }]);
+      const h = r.value[0] && decodeMarket(b64decode(r.value[0].data[0])), f = r.value[1] && decodeFeed(b64decode(r.value[1].data[0])); if (!h) throw new BackendError('MarketClosed', SAY.MarketClosed);
+      if (h.open.epoch !== this.mk.ringFor) { const a = await this.er.account(addr.market()), full = a && decodeMarket(a.data); if (full) { this.mk.ring = full.rounds; this.mk.ringFor = full.open.epoch; } }
+      // the tick second is at most one second behind the chain's clock, so the largest difference seen is the closest
+      if (h.lastTickTs) this.mk.skew = Math.max(this.mk.skew === -Infinity ? -Infinity : this.mk.skew - 5, h.lastTickTs * 1000 - Date.now());
+      Object.assign(this.mk, { head: h, cents: f?.cents ?? null, at: Date.now() });
+    })().finally(() => { this.mkBusy = null; }));
+  }
+  private async readCrowd(epochs: number[]) {
+    if (Date.now() - this.mk.crowdAt < 1_800) return; this.mk.crowdAt = Date.now();
+    const r = await this.get<{ crowd: Record<number, { wallet: string; seq: string; side: MarketSide; chips: number; who: string }[]> }>(`/market/crowd?epochs=${epochs.join(',')}`).catch(() => null); if (!r) return;
+    this.mk.crowd = Object.fromEntries(Object.entries(r.crowd).map(([e, l]) => [e, l.map((b) => ({ betId: Number(b.seq), who: b.who, side: b.side, chips: b.chips, mine: b.wallet === this.me }))]));
+  }
+  async market(): Promise<MarketState> {
+    await this.readMarket(); const h = this.mk.head!, skew = Number.isFinite(this.mk.skew) ? this.mk.skew : 0, now = Date.now() + skew;
+    const round = (r: RoundState, phase: 'open' | 'live'): MarketRound => ({ epoch: Number(r.epoch), phase, openAt: r.openTs * 1000, lockAt: r.lockTs * 1000, lockedAt: r.lockedAt * 1000, closedAt: 0, lockPrice: r.lockC ? r.lockC / 100 : null, closePrice: null, up: Number(r.up / CHIP), down: Number(r.down / CHIP), bets: r.bets, outcome: '' });
+    const open = round(h.open, 'open'), live = h.live ? round(h.live, 'live') : null; await Promise.race([this.readCrowd([open.epoch, ...(live ? [live.epoch] : [])]), sleep(400)]);
+    // my own bets are on chain: they show even when our server is down
+    const crowd: Record<number, MarketCrowdBet[]> = { ...this.mk.crowd }; for (const s of this.player?.btc ?? []) { const e = Number(s.epoch); if (!crowd[e]?.some((b) => b.mine)) crowd[e] = [{ betId: Number(s.seq), who: 'You', side: s.side === 1 ? 'up' : 'down', chips: Number(s.wager / CHIP), mine: true }, ...(crowd[e] ?? [])]; }
+    return {
+      enabled: h.enabled, epoch: open.epoch, pending: h.enabled && now >= open.lockAt, roundS: h.roundS, graceS: h.graceS, payout: h.payoutBps / 10_000, wagers: h.wagers, open, live, crowd, skew,
+      recent: this.mk.ring.slice(0, 12).map((r) => ({ epoch: r.epoch, phase: r.outcome === 4 ? 'void' as const : 'closed' as const, openAt: 0, lockAt: 0, lockedAt: 0, closedAt: r.closedTs * 1000, lockPrice: r.lockC / 100, closePrice: r.closeC / 100, up: r.up, down: r.down, bets: r.bets, outcome: OUTCOMES[r.outcome] as MarketRound['outcome'] })),
+      price: this.mk.cents ? this.mk.cents / 100 : null, history: [], oraclePrice: h.lastPriceC ? h.lastPriceC / 100 : null, oracleAt: h.lastPriceTs * 1000, oracle: 'Pyth Lazer oracle',
+    };
+  }
+  async marketBet(epoch: number, side: MarketSide, chips: number) { const tx = await this.play((w, s) => ix.marketBet(w, s, BigInt(epoch), side === 'up' ? 1 : 2, chips)); return { betId: Number(this.player!.btc.find((b) => b.epoch === BigInt(epoch))?.seq ?? this.player!.betSeq), tx }; }
+  async marketResult(betId: number): Promise<MarketResult | null> { const seq = BigInt(betId); const b = this.player?.recent.find((x) => x.seq === seq && x.game === GAME.market); if (!b) { void this.settleBtc(); return null; } return this.btcResult(b); }
+  private async btcResult(b: BetResultState): Promise<MarketResult> {
+    const low = b.outcome[2] | (b.outcome[3] << 8), find = () => this.mk.ring.find((r) => (r.epoch & 0xffff) === low); if (!find()) { this.mk.ringFor = 0n; await this.readMarket(0).catch(() => {}); }
+    const r = find(), o = OUTCOMES[b.outcome[1]], link = r && await this.roundLink(r.epoch);
+    return { betId: Number(b.seq), side: b.outcome[0] === 1 ? 'up' : 'down', outcome: o === 'expired' ? 'void' : o, wager: Number(b.wager / CHIP), payout: Number(b.payout) / 1e6, blessing: b.blessingChips, lockPrice: r ? r.lockC / 100 : null, closePrice: r ? r.closeC / 100 : null, luckGain: b.luckGainMilli / 1000, epoch: r?.epoch, roundTx: link ?? undefined };
+  }
+  private async roundLink(epoch: number): Promise<string | null> { const k = this.mk.links.get(epoch); if (k?.tx) return k.tx; await Promise.race([this.pastRounds(epoch + 1).catch(() => []), sleep(900)]); return this.mk.links.get(epoch)?.tx ?? null; }
+  /** anyone may settle a finished bet; our server does it too, whichever is first */
+  private async settleBtc() {
+    if (this.mkClaiming || !this.player?.btc.length) return; this.mkClaiming = true;
+    try { await this.readMarket(); const h = this.mk.head!; if (this.player.btc.some((s) => s.epoch < h.open.epoch && s.epoch !== h.live?.epoch)) await this.act([ix.marketClaim(this.need())]); } catch { /* again in a moment */ } finally { this.mkClaiming = false; }
+  }
+  /** a bet that was open and now has a result: tell the panel (or the floor, when it is closed) */
+  private watchBtc(p: PlayerState) {
+    for (const s of p.btc) this.mkMine.set(s.seq, s.epoch);
+    for (const seq of this.mkMine.keys()) { const b = p.recent.find((x) => x.seq === seq && x.game === GAME.market); if (b) { this.mkMine.delete(seq); void this.btcResult(b).then((r) => bus.emit('marketSettled', r)); } }
+  }
+  /** the last 4 hours come from the chain, older ones and every link from our server's copy */
+  async pastRounds(before?: number): Promise<PastRound[]> {
+    const [srv] = await Promise.all([this.get<{ rounds: PastRound[] }>(`/market/rounds?limit=60${before ? `&before=${before}` : ''}`).catch(() => ({ rounds: [] as PastRound[] })), this.readMarket().catch(() => {})]);
+    for (const r of srv.rounds) this.mk.links.set(r.epoch, { tx: r.tx, page: r.page });
+    const chain = this.mk.ring.filter((r) => !before || r.epoch < before).slice(0, 60).map((r): PastRound => ({ epoch: r.epoch, outcome: OUTCOMES[r.outcome] as PastRound['outcome'], lock: r.lockC / 100, close: r.closeC / 100, closedAt: r.closedTs * 1000, up: r.up, down: r.down, bets: r.bets, tx: this.mk.links.get(r.epoch)?.tx ?? null, page: this.mk.links.get(r.epoch)?.page ?? null }));
+    const known = new Set(chain.map((r) => r.epoch)); return [...chain, ...srv.rounds.filter((r) => !known.has(r.epoch))].sort((a, b) => b.epoch - a.epoch).slice(0, 60);
+  }
+  l1Url(sig: string) { return l1Tx(sig); }
   verifyBet(p: BetProof) { return checkBet(this.er, this.need(), p); }
   txUrl(sig: string) { return erTx(sig); }
   async history(): Promise<HistRow[]> {
@@ -215,7 +275,7 @@ export class SolanaBackend implements Backend {
     e.chips = Number(p.chips / CHIP); e.luck = p.luckMilli / 1000; e.faith = p.faithMilli / 1000; s.settledAt = Date.now();
     s.spins = p.spins; s.flips = p.flips; s.dice = p.dice; s.harmonyAt = p.harmonyAt * 1000; s.roulette = p.roulette; s.candles = p.candles; s.wagered = Number(p.wagered / CHIP); s.tithed = Number(p.tithed / CHIP); s.converted = Number(p.convertedMilli) / 1000; s.faithEarned = Number(p.faithEarnedMilli) / 1000;
     s.claimed = Object.fromEntries(QUESTS.filter((q) => p.questsClaimed & (1 << q.bit)).map((q) => [q.id, true]));
-    this.fade(p.lastUpdate * 1000); store.emit();
+    this.fade(p.lastUpdate * 1000); store.emit(); this.watchBtc(p);
   }
   private async readPlayer(): Promise<boolean> { const w = this.me; if (!w) return false; const a = await this.er.account(addr.player(w)); const p = a && decodePlayer(a.data); if (!p || w !== this.me) return false; this.apply(p); return true; }
   private async readSol() { const w = this.me; if (!w) return; const b = await this.l1.balance(w); if (w === this.me) { store.eco.sol = sol(b); store.emit(); } }

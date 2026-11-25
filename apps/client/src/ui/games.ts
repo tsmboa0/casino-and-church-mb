@@ -612,7 +612,7 @@ async function fundWallet(root: Root, refresh: () => void) {
     } catch { /* keep watching */ } finally { busy = false; }
   }, 4000);
 }
-const GAME_NAME: Record<string, string> = { slots: 'SLOTS', coinflip: 'COIN FLIP', dice: 'DICE', roulette: 'ROULETTE', wheel: 'WHEEL', harmony: 'HARMONY', blackjack: 'BLACKJACK' };
+const GAME_NAME: Record<string, string> = { slots: 'SLOTS', coinflip: 'COIN FLIP', dice: 'DICE', roulette: 'ROULETTE', wheel: 'WHEEL', harmony: 'HARMONY', blackjack: 'BLACKJACK', btc: 'BTC' };
 const ago = (t: number) => { const s = Math.max(1, Math.round((Date.now() - t) / 1000)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`; };
 function cashier(root: Root, close: () => void) {
   shell(root, close, 'casino', 'CASHIER CAGE', `
@@ -1211,9 +1211,10 @@ const marketLine = (r: MarketResult) => r.outcome === 'void'
 /** shows a settled market bet as the big result card */
 function marketVerdict(root: Root, r: MarketResult) {
   const pay = `+${r.payout % 1 ? r.payout.toFixed(1) : r.payout}`;
-  if (r.outcome === 'void' || r.outcome === 'tie') showResult(root, 'push', 'BET RETURNED', pay, marketLine(r));
-  else if (r.payout > 0) showResult(root, 'win', 'YOU CALLED IT!', pay, `${marketLine(r)}${r.blessing ? ` · Blessing +${r.blessing}` : ''}`);
-  else showResult(root, 'lose', 'WRONG CALL', r.wager, marketLine(r));
+  const link = r.roundTx ? `<br>${txLink(r.roundTx, `SEE ROUND #${r.epoch}`)}` : '';
+  if (r.outcome === 'void' || r.outcome === 'tie') showResult(root, 'push', 'BET RETURNED', pay, marketLine(r) + link);
+  else if (r.payout > 0) showResult(root, 'win', 'YOU CALLED IT!', pay, `${marketLine(r)}${r.blessing ? ` · Blessing +${r.blessing}` : ''}${link}`);
+  else showResult(root, 'lose', 'WRONG CALL', r.wager, marketLine(r) + link);
 }
 // a round can end while the panel is closed: say so on the floor
 bus.on('marketSettled', (r: MarketResult) => {
@@ -1242,6 +1243,27 @@ function mountTradingView(host: HTMLElement) {
   host.append(wrap);
 }
 
+/** every finished round: result, prices, what was on each side, and the transactions that prove it */
+async function pastRoundsView(root: Root) {
+  const gm = root.querySelector('.gm'); if (!gm || gm.querySelector('.fw')) return;
+  const el = document.createElement('div'); el.className = 'fw pr'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Past rounds');
+  el.innerHTML = `<div class="fw-card"><h3>PAST ROUNDS</h3><div class="pr-list" id="pr" role="status">Reading the rollup...</div><div class="fw-row"><button class="g-key" data-f="more">OLDER</button><button class="g-key dark" data-f="done">DONE</button></div></div>`;
+  gm.appendChild(el); const list = el.querySelector<HTMLElement>('#pr')!; let oldest: number | undefined, busy = false;
+  const ago = (t: number) => { const s = Math.max(0, (Date.now() - t) / 1000); return s < 60 ? `${Math.floor(s)}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86_400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86_400)}d`; };
+  const load = async () => {
+    if (busy) return; busy = true; const more = el.querySelector<HTMLButtonElement>('[data-f=more]')!; more.disabled = true;
+    try {
+      const rows = await backend.pastRounds!(oldest); if (!el.isConnected) return;
+      if (!oldest) list.innerHTML = '<div class="pr-row head"><span>ROUND</span><span>RESULT</span><span>LOCK &rarr; CLOSE</span><span>UP</span><span>DOWN</span><span>PROOF</span></div>';
+      if (!rows.length) { more.textContent = 'NO OLDER ONES'; return; }
+      list.insertAdjacentHTML('beforeend', rows.map(r => `<div class="pr-row ${r.outcome}"><span>#${r.epoch} <small>${ago(r.closedAt)}</small></span><b>${r.outcome === 'up' ? `${ARROW.up} UP` : r.outcome === 'down' ? `${ARROW.down} DOWN` : r.outcome.toUpperCase()}</b><span>${r.outcome === 'void' ? 'no price in time' : `${usd(r.lock)} &rarr; ${usd(r.close)}`}</span><span>${r.up ? fmt(r.up) : '-'}</span><span>${r.down ? fmt(r.down) : '-'}</span><span>${r.tx ? txLink(r.tx, 'ROLLUP') : ''}${r.page && backend.l1Url ? ` <a class="txl" href="${backend.l1Url(r.page)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">L1 &#8599;</a>` : ''}${!r.tx && !r.page ? '&middot;' : ''}</span></div>`).join(''));
+      oldest = rows[rows.length - 1].epoch; more.disabled = oldest <= 1;
+    } catch (e) { list.textContent = errText(e); } finally { busy = false; }
+  };
+  el.addEventListener('click', (ev) => { ev.stopPropagation(); const f = (ev.target as HTMLElement).closest<HTMLElement>('[data-f]')?.dataset.f; if (f === 'more') void load(); if (f === 'done' || ev.target === el) el.remove(); });
+  void load();
+}
+
 function market(root: Root, close: () => void) {
   if (!backend.market) { shell(root, close, 'casino', 'BTC EXCHANGE', '<p class="mk-off">The exchange is closed in this mode.</p>'); return; }
   let st: MarketState | null = null, side: MarketSide = 'up', bet = 1, busy = false, alive = true, timer = 0, frame = 0;
@@ -1249,11 +1271,11 @@ function market(root: Root, close: () => void) {
   shell(root, close, 'market' as any, 'BTC EXCHANGE', `
   <div class="mk">
     <div class="mk-l">
-      <div class="mk-quote"><div><small>BTC / USDT &middot; BINANCE</small><b id="px">—</b></div><div class="mk-chg" id="chg"></div></div>
+      <div class="mk-quote"><div><small>${backend.mode === 'chain' ? 'BTC / USD &middot; THE ORACLE' : 'BTC / USDT'}</small><b id="px">—</b></div><div class="mk-chg" id="chg"></div></div>
       <div class="mk-chart" id="chart"><canvas id="cv"></canvas><span class="mk-note" id="cvn">connecting to the price feed…</span></div>
       <div class="mk-tl" id="tl"><div class="seg bet"><span>BETTING</span></div><div class="seg min"><span>YOUR MINUTE</span></div><i class="now" id="tlnow"></i></div>
       <div class="mk-tlx"><span id="tla"></span><span id="tlb"></span></div>
-      <div class="mk-recent" id="recent"></div>
+      <div class="mk-past"><div class="mk-recent" id="recent"></div>${backend.pastRounds ? '<button class="mk-all" id="past">PAST ROUNDS</button>' : ''}</div>
     </div>
     <div class="mk-r">
       <div class="mk-box live" id="live"></div>
@@ -1277,6 +1299,7 @@ function market(root: Root, close: () => void) {
   // the live game shows TradingView's real BTC chart (1-minute candles); the offline demo draws its simulated prices
   const tv = backend.mode === 'chain';
   if (tv) mountTradingView($(root, '#chart'));
+  root.querySelector('#past')?.addEventListener('click', () => void pastRoundsView(root));
   const shutdown = () => { alive = false; window.clearTimeout(timer); cancelAnimationFrame(frame); bus.off('marketSettled', onSettled); };
   $(root, '[data-close]').addEventListener('click', shutdown);
   root.closest('#modal')?.addEventListener('pointerdown', (e) => { if (e.target === e.currentTarget) shutdown(); }, { once: true });
@@ -1359,8 +1382,8 @@ function market(root: Root, close: () => void) {
     // ---- recent outcomes
     $(root, '#recent').innerHTML = s.recent.slice(0, 10).map(r => `<i class="mk-pill ${r.outcome || 'none'}" title="#${r.epoch}">${r.outcome === 'up' ? ARROW.up : r.outcome === 'down' ? ARROW.down : r.outcome === 'tie' ? '=' : '&times;'}</i>`).join('') || '<span class="mk-dim">No rounds yet</span>';
     $(root, '#foot').innerHTML = backend.mode === 'chain'
-      ? `Chart: Binance BTC/USDT by <a href="https://www.tradingview.com/" target="_blank" rel="noopener nofollow">TradingView</a> &middot; every start and end price comes from the <b>${s.oracle}</b> (a median of several exchanges) and is settled on NEAR &middot; a tie returns your bet`
-      : `${s.roundS}-second rounds &middot; <b>demo prices</b> (offline) &middot; on the live game the OutLayer TEE oracle prices every round on NEAR`;
+      ? `Chart: Binance BTC/USDT by <a href="https://www.tradingview.com/" target="_blank" rel="noopener nofollow">TradingView</a> &middot; every start and end price is the <b>${s.oracle}</b>'s, taken on chain by a crank nobody can time &middot; a tie returns your bet`
+      : `${s.roundS}-second rounds &middot; <b>demo prices</b> (offline) &middot; on the live game an oracle prices every round on chain`;
   };
 
   // ---- the chart: the last five minutes of BTC, the live round's lock price as a dashed line

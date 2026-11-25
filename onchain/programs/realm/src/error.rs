@@ -51,4 +51,16 @@ pub enum RealmError {
     NoHand,
     #[msg("double is for the first two cards")]
     CannotDouble,
+    #[msg("the market is closed")]
+    MarketClosed,
+    #[msg("that round has moved on")]
+    RoundMoved,
+    #[msg("betting on that round has closed")]
+    RoundLocked,
+    #[msg("one bet per round")]
+    AlreadyBet,
+    #[msg("too many unsettled bets")]
+    SlotsFull,
+    #[msg("bad price feed")]
+    BadFeed,
 }
