@@ -1,7 +1,7 @@
 // M6 on devnet: the new economy (free chips, exact payouts, LUCK by game), the Church, Harmony, Founders' Row, campaigns.
 import fs from 'node:fs'; import crypto from 'node:crypto';
-import { addr, addSignatures, buildTx, CHIP, compileMessage, concat, decodeBank, decodeBoard, decodeHouse, decodePlayer, decodePlots, decodePurse, drawsOf, GAME, hasClaimed, ix, newSigner, realmIx, u64, type Signer } from '../../packages/realm/src/index.ts';
-import { HARMONY_PRIZES, pickWeighted, resolveCoin, resolveSlots } from '../../apps/client/src/core/rules.ts'; import { cli, er, key, l1, send, sleep, until } from './lib.ts';
+import { addr, addSignatures, buildTx, CHIP, compileMessage, concat, decodeBank, decodeBoard, decodeHouse, decodePlayer, decodePlots, decodePurse, drawsOf, GAME, hasClaimed, ix, realmIx, u64, type Signer } from '../../packages/realm/src/index.ts';
+import { HARMONY_PRIZES, pickWeighted, resolveCoin, resolveSlots } from '../../apps/client/src/core/rules.ts'; import { cli, er, key, l1, send, sleep, until, testKey as newSigner } from './lib.ts';
 const sponsor = key('sponsor'), admin = key('admin'), oracle = key('oracle'); let failed = 0; const out: Record<string, unknown> = {}; const J = (v: unknown) => JSON.stringify(v, (_, x) => (typeof x === 'bigint' ? Number(x) : x));
 const check = (n: string, pass: boolean, info: unknown = '') => { out[n] = { pass, info }; if (!pass) failed++; console.log(pass ? 'ok  ' : 'FAIL', n, typeof info === 'string' ? info : J(info)); };
 const refused = async (n: string, f: () => Promise<unknown>, want?: string) => { try { await f(); check(n, false, 'ACCEPTED'); } catch (e: any) { check(n, !want || e.code === want, e.code + (want && e.code !== want ? ` (wanted ${want}) ${e.message}` : '')); } };

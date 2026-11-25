@@ -1,9 +1,9 @@
 // M4 on devnet: blackjack by a fixed strategy (several players at once), every card replayed from the oracle's numbers,
 // the Wheel of Fortune, abuse, idle hands, and the books. HANDS, PLAYERS
 import fs from 'node:fs'; import crypto from 'node:crypto';
-import { addr, b64decode, BJ, BJ_LABELS, buildTx, CHIP, compileMessage, concat, decodeBank, decodeHouse, decodePlayer, decodePurse, drawsOf, GAME, handStepsFromLogs, ix, newSigner, P, realmIx, u64, u8, type Signer } from '../../packages/realm/src/index.ts';
+import { addr, b64decode, BJ, BJ_LABELS, buildTx, CHIP, compileMessage, concat, decodeBank, decodeHouse, decodePlayer, decodePurse, drawsOf, GAME, handStepsFromLogs, ix, P, realmIx, u64, u8, type Signer } from '../../packages/realm/src/index.ts';
 import { blackjackPayout, handTotal, pickWeighted, WHEEL_PRIZES } from '../../apps/client/src/core/rules.ts'; import { replayHand } from '../../apps/client/src/solana/verify.ts';
-import { cli, er, key, l1, send, sleep, until } from './lib.ts';
+import { cli, er, key, l1, send, sleep, until, testKey as newSigner } from './lib.ts';
 const HANDS = Number(process.env.HANDS ?? 100), N = Number(process.env.PLAYERS ?? 4), WHEEL = process.env.WHEEL !== '0', IDLE = process.env.IDLE !== '0', sponsor = key('sponsor'); let failed = 0; const out: Record<string, unknown> = {};
 const check = (n: string, pass: boolean, info: unknown = '') => { out[n] = { pass, info }; if (!pass) failed++; console.log(pass ? 'ok  ' : 'FAIL', n, typeof info === 'string' ? info : JSON.stringify(info, (_, v) => (typeof v === 'bigint' ? String(v) : v))); };
 const refused = async (n: string, f: () => Promise<unknown>, want?: string) => { try { await f(); check(n, false, 'ACCEPTED'); } catch (e: any) { check(n, !want || e.code === want, e.code + (want && e.code !== want ? ` (wanted ${want}) ${e.message}` : '')); } };

@@ -1,7 +1,7 @@
 // the real program on devnet: a new player from nothing, money both ways, and everything that must be refused
 import fs from 'node:fs';
-import { addr, buildTx, CHIP, compileMessage, decodeBank, decodeHouse, decodePlayer, decodePurse, ix, newSigner, parseTx, realmIx, u64, u8, type Signer } from '../../packages/realm/src/index.ts';
-import { cli, er, key, l1, send, sleep, until } from './lib.ts';
+import { addr, buildTx, CHIP, compileMessage, decodeBank, decodeHouse, decodePlayer, decodePurse, ix, parseTx, realmIx, u64, u8, type Signer } from '../../packages/realm/src/index.ts';
+import { cli, er, key, l1, send, sleep, until, testKey as newSigner } from './lib.ts';
 const sponsor = key('sponsor'), admin = key('admin'), keeper = key('keeper'); const out: Record<string, unknown> = {}; let failed = 0;
 const check = (n: string, pass: boolean, info: unknown = '') => { out[n] = { pass, info }; if (!pass) failed++; console.log(pass ? 'ok  ' : 'FAIL', n, typeof info === 'string' ? info : JSON.stringify(info, (_, v) => (typeof v === 'bigint' ? String(v) : v))); };
 const refused = async (n: string, f: () => Promise<unknown>, want?: string) => { try { await f(); check(n, false, 'ACCEPTED'); } catch (e: any) { check(n, !want || e.code === want, e.code + (want && e.code !== want ? ` (wanted ${want}) ${e.message}` : '')); } };

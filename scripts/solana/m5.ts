@@ -1,7 +1,7 @@
 // The BTC market on devnet: real rounds, real crank, real oracle. ROUNDS rounds with PLAYERS players, then abuse.
 import fs from 'node:fs'; import crypto from 'node:crypto';
-import { addr, b64decode, buildTx, CHIP, compileMessage, concat, decodeBank, decodeHouse, decodeMarket, decodePlayer, decodePurse, GAME, ix, MARKET_HEAD, marketSettledFromLogs, newSigner, OUTCOMES, P, realmIx, roundsFromLogs, u64, u8, type Ix, type Signer } from '../../packages/realm/src/index.ts';
-import { cli, er, key, l1, send, sleep, until } from './lib.ts';
+import { addr, b64decode, buildTx, CHIP, compileMessage, concat, decodeBank, decodeHouse, decodeMarket, decodePlayer, decodePurse, GAME, ix, MARKET_HEAD, marketSettledFromLogs, OUTCOMES, P, realmIx, roundsFromLogs, u64, u8, type Ix, type Signer } from '../../packages/realm/src/index.ts';
+import { cli, er, key, l1, send, sleep, until, testKey as newSigner } from './lib.ts';
 const ROUNDS = Number(process.env.ROUNDS ?? 5), N = Number(process.env.PLAYERS ?? 4), sponsor = key('sponsor'), keeper = key('keeper'); let failed = 0; const out: Record<string, unknown> = {};
 const J = (v: unknown) => JSON.stringify(v, (_, x) => (typeof x === 'bigint' ? Number(x) : x)); const check = (n: string, pass: boolean, info: unknown = '') => { out[n] = { pass, info }; if (!pass) failed++; console.log(pass ? 'ok  ' : 'FAIL', n, typeof info === 'string' ? info : J(info)); };
 const refused = async (n: string, f: () => Promise<unknown>, want?: string) => { try { await f(); check(n, false, 'ACCEPTED'); } catch (e: any) { check(n, !want || e.code === want, e.code + (want && e.code !== want ? ` (wanted ${want}) ${e.message}` : '')); } };

@@ -1,6 +1,6 @@
 // M4: blackjack and the wheels in the real client in Chrome, on devnet. Privy is replaced by a test wallet; everything else is real.
 import { spawn, type ChildProcess } from 'node:child_process'; import { generateKeyPairSync, randomBytes, sign } from 'node:crypto'; import fs from 'node:fs'; import os from 'node:os'; import path from 'node:path';
-import { addr, addSignatures, b64decode, b64encode, CHIP, decodePlayer, decodePurse, GAME, ix, newSigner } from '../../packages/realm/src/index.ts'; import { cli, er, l1, send, sleep, until } from '../solana/lib.ts';
+import { addr, addSignatures, b64decode, b64encode, CHIP, decodePlayer, decodePurse, GAME, ix } from '../../packages/realm/src/index.ts'; import { cli, er, l1, send, sleep, until, testKey as newSigner } from '../solana/lib.ts';
 const OUT = process.env.OUT ?? os.tmpdir(), API = 8799, WEB = 5179, kids: ChildProcess[] = []; const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
 const run = (cmd: string, args: string[], cwd: string, env: Record<string, string>) => { const k = spawn(cmd, args, { cwd, env: { ...process.env, ...env }, stdio: 'ignore' }); kids.push(k); return k; }; const root = process.cwd();
 run('npx', ['tsx', 'src/solana/index.ts'], `${root}/apps/server`, { PORT: String(API), CLIENT_ORIGIN: `http://localhost:${WEB}`, PRIVY_VERIFICATION_KEY: publicKey.export({ type: 'spki', format: 'pem' }).toString(), DATABASE_URL: '' });
