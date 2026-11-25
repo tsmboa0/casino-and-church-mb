@@ -26,13 +26,13 @@ export interface BetResult {
 }
 /** what a player needs to check a bet: its number and the randomness that settled it */
 export interface BetProof { seq: string; randomness: string; clientSeed: string; placeTx: string }
-export interface BetCheck { found: boolean; tx: string | null; randomness: string; fromVrf: boolean; recomputed: string; recorded: string; matches: boolean }
-export interface WheelResult { prize: number | 'JACKPOT'; chips: number }
+export interface BetCheck { /** how many random numbers the bet used (a blackjack hand uses one per action) */ answers?: number; found: boolean; tx: string | null; randomness: string; fromVrf: boolean; recomputed: string; recorded: string; matches: boolean }
+export interface WheelResult { prize: number | 'JACKPOT'; chips: number; proof?: BetProof }
 /** a blackjack hand as the panel draws it (chain: built from get_blackjack + the settled result) */
 export interface BjState {
   betId: number; stage: 'player' | 'done'; player: string[]; dealer: string[];
   playerTotal: number; dealerTotal: number; soft: boolean; doubled: boolean; stake: number; canDouble: boolean;
-  result?: { label: 'natural' | 'win' | 'push' | 'lose'; payout: number; blessing: number };
+  result?: { label: 'natural' | 'win' | 'push' | 'lose'; payout: number; blessing: number; proof?: BetProof };
 }
 // ---- the two AI hosts (BACKEND_PLAN.md R3-6) ----
 export type AgentId = 'fortuna' | 'nakamoto';
@@ -102,6 +102,8 @@ export interface Backend {
   /** OPTIONAL blackjack (contract: place_bet("blackjack") then blackjack_act). Resolves once the opening cards are shown
    *  (stage 'player'), or 'done' straight away on a natural. */
   blackjackDeal?(wager: number): Promise<BjState>;
+  /** OPTIONAL: a hand left open (a reload, another device): the panel picks it up again */
+  blackjackOpen?(): Promise<BjState | null>;
   /** hit keeps stage 'player' unless it busts or makes 21; stand/double resolve only after the dealer has finished (stage 'done') */
   blackjackAct?(betId: number, action: 'hit' | 'stand' | 'double'): Promise<BjState>;
   /** OPTIONAL: the AI hosts (R3-6). The mock simulates them with the rule policy, unsigned. */

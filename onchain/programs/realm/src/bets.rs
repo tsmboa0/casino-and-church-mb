@@ -27,13 +27,15 @@ pub enum BetError {
     NothingPending,
     TooEarly,
     Overflow,
+    NoHand,
+    CannotDouble,
 }
 type R<T> = core::result::Result<T, BetError>;
 
 pub fn bps(amount: u64, b: u64) -> u64 {
     (u128::from(amount) * u128::from(b) / 10_000) as u64
 }
-fn wager_allowed(h: &House, chips: u64) -> R<()> {
+pub fn wager_allowed(h: &House, chips: u64) -> R<()> {
     if chips == 0 || !h.params.allowed_wagers.iter().any(|w| *w != 0 && u64::from(*w) == chips) {
         return Err(BetError::BadWager);
     }
@@ -187,10 +189,16 @@ pub fn settle(p: &mut Player, h: &mut House, randomness: &[u8; 32], seq: u64, no
     p.wagered = p.wagered.saturating_add(b.wager);
     p.last_vrf = *randomness;
     p.last_vrf_seq = seq;
-    let i = usize::from(p.recent_head) % p.recent.len();
-    p.recent[i] = BetResult { seq, wager: b.wager, payout, ts: now as u32, luck_gain_milli: luck, outcome: r.outcome, blessing_chips: (blessing / CHIP).min(u64::from(u16::MAX)) as u16, game: b.game, flags: u8::from(r.jackpot) };
-    p.recent_head = ((i + 1) % p.recent.len()) as u8;
+    record(p, seq, b.wager, payout, now, luck, r.outcome, blessing, b.game, u8::from(r.jackpot));
     Some(Settled { seq, game: b.game, pick: b.pick, wager: b.wager, payout, blessing, luck_gain_milli: luck, outcome: r.outcome, jackpot: r.jackpot })
+}
+
+/// into the ring of the last eight results, where the client reads it
+#[allow(clippy::too_many_arguments)]
+pub fn record(p: &mut Player, seq: u64, wager: u64, payout: u64, now: i64, luck_gain_milli: u32, outcome: [u8; 4], blessing: u64, game: u8, flags: u8) {
+    let i = usize::from(p.recent_head) % p.recent.len();
+    p.recent[i] = BetResult { seq, wager, payout, ts: now as u32, luck_gain_milli, outcome, blessing_chips: (blessing / CHIP).min(u64::from(u16::MAX)) as u16, game, flags };
+    p.recent_head = ((i + 1) % p.recent.len()) as u8;
 }
 
 /// The oracle never answered. Everything the bet took comes back.
@@ -217,11 +225,11 @@ pub fn refund(p: &mut Player, h: &mut House, now: i64) -> R<(u64, u64)> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use crate::money::liabilities;
     use crate::state::Params;
-    fn rig(vault_chips: u64, chips: u64) -> (Player, House) {
+    pub fn rig(vault_chips: u64, chips: u64) -> (Player, House) {
         let mut p: Player = bytemuck::Zeroable::zeroed();
         let mut h: House = bytemuck::Zeroable::zeroed();
         h.params = Params::launch();
@@ -233,7 +241,7 @@ mod tests {
         h.total_credited = h.vault + h.treasury + h.jackpot + p.chips;
         (p, h)
     }
-    fn balanced(h: &House) { assert_eq!(liabilities(h), u128::from(h.total_credited - h.total_withdrawn)); }
+    pub fn balanced(h: &House) { assert_eq!(liabilities(h), u128::from(h.total_credited - h.total_withdrawn)); }
     fn heads() -> [u8; 32] { [0; 32] }
     fn tails() -> [u8; 32] { [0xff; 32] }
 

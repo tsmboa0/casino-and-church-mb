@@ -1,0 +1,150 @@
+{
+ "at": "2026-11-25T14:58:54.602Z",
+ "checks": {
+  "200 blackjack hands, 4 players at once": {
+   "pass": true,
+   "info": {
+    "done": 200,
+    "acts": {
+     "deal": 200,
+     "hit": 116,
+     "stand": 141,
+     "double": 11
+    },
+    "ends": {
+     "lose": 88,
+     "push": 20,
+     "win": 83,
+     "natural": 9
+    },
+    "errs": {},
+    "staked": 2110,
+    "back": 2205
+   }
+  },
+  "every result, payout and balance follows the rules": {
+   "pass": true,
+   "info": {
+    "wrong": 0
+   }
+  },
+  "an action answers in under 1.5 s (median)": {
+   "pass": true,
+   "info": {
+    "actions": 468,
+    "p50": 811,
+    "p95": 1426,
+    "max": 2274
+   }
+  },
+  "books balanced throughout": {
+   "pass": true,
+   "info": {
+    "booksBad": 0
+   }
+  },
+  "every card replays from the oracle numbers": {
+   "pass": true,
+   "info": {
+    "replayed": 200,
+    "bad": 0
+   }
+  },
+  "cards only ever came through the VRF program": {
+   "pass": true,
+   "info": {
+    "maxComputeUnits": 76301
+   }
+  },
+  "hit with no hand": {
+   "pass": true,
+   "info": "NoHand"
+  },
+  "a bet the table does not offer": {
+   "pass": true,
+   "info": "BadWager"
+  },
+  "a second deal over an open hand": {
+   "pass": true,
+   "info": "BetPending"
+  },
+  "a coin flip over an open hand": {
+   "pass": true,
+   "info": "BetPending"
+  },
+  "cashing out over an open hand": {
+   "pass": true,
+   "info": "BetPending"
+  },
+  "an action that does not exist": {
+   "pass": true,
+   "info": "BadPick"
+  },
+  "dealing again as an action": {
+   "pass": true,
+   "info": "BadPick"
+  },
+  "standing for somebody too early": {
+   "pass": true,
+   "info": "TooEarly"
+  },
+  "refunding a hand that waits for the player": {
+   "pass": true,
+   "info": "NothingPending"
+  },
+  "a stranger hitting your hand": {
+   "pass": true,
+   "info": "BadSession"
+  },
+  "another player’s session": {
+   "pass": true,
+   "info": "BadSession"
+  },
+  "dealing yourself a card": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "a fake oracle queue": {
+   "pass": true,
+   "info": "custom_2012"
+  },
+  "three actions at once: exactly one counts": {
+   "pass": true,
+   "info": [
+    "ok",
+    "NoHand",
+    "NoHand"
+   ]
+  },
+  "no chips": {
+   "pass": true,
+   "info": "NoChips"
+  },
+  "an idle hand is stood and settled": {
+   "pass": true,
+   "info": {
+    "by": "anyone",
+    "end": "win"
+   }
+  },
+  "the wheel without LUCK": {
+   "pass": true,
+   "info": "LuckLow"
+  },
+  "Wheel of Fortune: pays what its number says, LUCK spent": {
+   "pass": true,
+   "info": {
+    "flips": 74,
+    "prize": 100,
+    "luck": 0
+   }
+  },
+  "final books": {
+   "pass": true,
+   "info": {
+    "vault": 5133,
+    "reserved": 0
+   }
+  }
+ }
+}

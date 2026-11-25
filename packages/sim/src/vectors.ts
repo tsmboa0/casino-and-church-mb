@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { drawsOf, pickWeighted, resolveCoin, resolveDice, resolveRoulette, resolveSlots, HARMONY_PRIZES, WHEEL_PRIZES } from '../../../apps/client/src/core/rules.ts';
 
-const doc = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../../contracts/realm/vectors.json'), 'utf8'));
+const doc = JSON.parse(readFileSync(resolve(import.meta.dirname, '../../../onchain/programs/realm/vectors.json'), 'utf8'));
 const cases = [...doc.fixed, ...doc.random];
 let bad = 0;
 for (const row of cases) {

@@ -5,24 +5,19 @@ on:
   pull_request:
 
 jobs:
-  contract:
+  program:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.95.0"
-          targets: wasm32-unknown-unknown
+          toolchain: "1.89.0"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: onchain
       - name: unit tests
-        working-directory: contracts/realm
-        run: cargo test -- --test-threads=8
-      - name: wasm size
-        working-directory: contracts/realm
-        run: |
-          cargo build --target wasm32-unknown-unknown --release
-          BYTES=$(wc -c < target/wasm32-unknown-unknown/release/realm.wasm)
-          echo "wasm bytes: $BYTES"
-          test "$BYTES" -lt 512000
+        working-directory: onchain
+        run: cargo test -p realm --release --locked
       - name: python tables
         run: python3 -I scripts/rtp_check.py
 
@@ -39,6 +34,7 @@ jobs:
           cache: pnpm
       - run: pnpm install
       - run: pnpm --filter @cnc/shared test
+      - run: pnpm --filter @cnc/realm test
       - run: pnpm --filter server test
       - run: pnpm --filter @cnc/sim vectors
       - run: pnpm --filter @cnc/sim sim

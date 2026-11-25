@@ -47,4 +47,8 @@ pub enum RealmError {
     NothingPending,
     #[msg("too early")]
     TooEarly,
+    #[msg("no blackjack hand to act on")]
+    NoHand,
+    #[msg("double is for the first two cards")]
+    CannotDouble,
 }

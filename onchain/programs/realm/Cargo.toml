@@ -25,6 +25,8 @@ bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
 ephemeral-rollups-sdk = { version = "=0.18.0", features = ["anchor", "vrf", "crank"] }
 session-keys = { version = "=3.1.1", features = ["no-entrypoint"] }
 solana-instructions-sysvar = "=3.0.1"
+solana-sha256-hasher = "=3.1.0"
 
 [dev-dependencies]
 serde_json = "1"
+solana-sha256-hasher = { version = "=3.1.0", features = ["sha2"] }

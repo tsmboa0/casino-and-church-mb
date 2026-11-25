@@ -12,6 +12,7 @@ use ephemeral_rollups_sdk::{ActionArgs, ShortAccountMeta};
 use session_keys::SessionTokenV2;
 
 pub mod bets;
+pub mod blackjack;
 pub mod constants;
 pub mod error;
 pub mod games;
@@ -45,6 +46,8 @@ impl From<BetError> for RealmError {
             BetError::VaultLow => RealmError::VaultLow,
             BetError::NothingPending => RealmError::NothingPending,
             BetError::TooEarly => RealmError::TooEarly,
+            BetError::NoHand => RealmError::NoHand,
+            BetError::CannotDouble => RealmError::CannotDouble,
             BetError::Overflow => RealmError::Overflow,
         }
     }
@@ -309,20 +312,8 @@ pub mod realm {
             emit!(BetPlaced { wallet: p.authority, seq, game, pick, wager: chips * CHIP });
             (seq, bets::caller_seed(&client_seed, &ctx.accounts.player.key().to_bytes(), seq))
         };
-        let meta = |k: Pubkey| SerializableAccountMeta { pubkey: k, is_signer: false, is_writable: true };
-        let ix = create_request_randomness_ix_const(
-            RequestRandomnessParams {
-                payer: ctx.accounts.signer.key(),
-                oracle_queue: ctx.accounts.oracle_queue.key(),
-                callback_program_id: crate::ID,
-                callback_discriminator: instruction::SettleBet::DISCRIMINATOR.to_vec(),
-                caller_seed: seed,
-                accounts_metas: Some(vec![meta(ctx.accounts.player.key()), meta(ctx.accounts.house.key())]),
-                callback_args: Some(seq.to_le_bytes().to_vec()),
-                ..Default::default()
-            },
-            PROGRAM_IDENTITY,
-        );
+        let a = &ctx.accounts;
+        let ix = ask_oracle(a.signer.key(), a.oracle_queue.key(), a.player.key(), a.house.key(), instruction::SettleBet::DISCRIMINATOR, seed, seq.to_le_bytes().to_vec());
         ctx.accounts.invoke_signed_vrf(&ctx.accounts.signer.to_account_info(), &ix)?;
         Ok(())
     }
@@ -346,8 +337,75 @@ pub mod realm {
         let now = Clock::get()?.unix_timestamp;
         let mut p = ctx.accounts.player.load_mut()?;
         let mut h = ctx.accounts.house.load_mut()?;
-        let (seq, wager) = bet_ok(bets::refund(&mut p, &mut h, now))?;
+        let (seq, wager) = bet_ok(if p.hand.awaiting != 0 { blackjack::refund(&mut p, &mut h, now) } else { bets::refund(&mut p, &mut h, now) })?;
         emit!(BetRefunded { wallet: p.authority, seq, wager });
+        Ok(())
+    }
+
+    // ================================================================ rollup: blackjack
+
+    /// Takes the bet, holds 4x, and asks for the first three cards. `bj_settle` answers.
+    pub fn bj_deal(ctx: Context<PlaceBet>, chips: u64, client_seed: [u8; 32]) -> Result<()> {
+        authorize(&ctx.accounts.signer.key(), &ctx.accounts.authority.key(), ctx.accounts.session_token.as_ref())?;
+        let now = Clock::get()?.unix_timestamp;
+        let seq = {
+            let mut p = ctx.accounts.player.load_mut()?;
+            let mut h = ctx.accounts.house.load_mut()?;
+            touch(&mut p, &mut h, &ctx.accounts.purse)?;
+            let seq = bet_ok(blackjack::deal(&mut p, &mut h, chips, now))?;
+            emit!(BetPlaced { wallet: p.authority, seq, game: games::BLACKJACK, pick: 0, wager: chips * CHIP });
+            seq
+        };
+        let a = &ctx.accounts;
+        let ix = ask_for_cards(a.signer.key(), a.oracle_queue.key(), a.player.key(), a.house.key(), &client_seed, seq, 0);
+        ctx.accounts.invoke_signed_vrf(&ctx.accounts.signer.to_account_info(), &ix)?;
+        Ok(())
+    }
+
+    /// 2 hit, 3 stand, 4 double. Each asks for its own randomness.
+    pub fn bj_act(ctx: Context<PlaceBet>, action: u8, client_seed: [u8; 32]) -> Result<()> {
+        authorize(&ctx.accounts.signer.key(), &ctx.accounts.authority.key(), ctx.accounts.session_token.as_ref())?;
+        let now = Clock::get()?.unix_timestamp;
+        let (seq, step) = {
+            let mut p = ctx.accounts.player.load_mut()?;
+            let mut h = ctx.accounts.house.load_mut()?;
+            touch(&mut p, &mut h, &ctx.accounts.purse)?;
+            bet_ok(blackjack::act(&mut p, &mut h, action, now))?
+        };
+        let a = &ctx.accounts;
+        let ix = ask_for_cards(a.signer.key(), a.oracle_queue.key(), a.player.key(), a.house.key(), &client_seed, seq, step);
+        ctx.accounts.invoke_signed_vrf(&ctx.accounts.signer.to_account_info(), &ix)?;
+        Ok(())
+    }
+
+    /// A hand nobody has touched for `bj_idle_s`: anyone may stand for the player, so no hand stays open for ever.
+    pub fn bj_stand_idle(ctx: Context<StandIdle>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let (seq, step) = {
+            let mut p = ctx.accounts.player.load_mut()?;
+            let mut h = ctx.accounts.house.load_mut()?;
+            bet_ok(blackjack::stand_idle(&mut p, &mut h, now))?
+        };
+        let a = &ctx.accounts;
+        let ix = ask_for_cards(a.signer.key(), a.oracle_queue.key(), a.player.key(), a.house.key(), &[0; 32], seq, step);
+        ctx.accounts.invoke_signed_vrf(&ctx.accounts.signer.to_account_info(), &ix)?;
+        Ok(())
+    }
+
+    /// Only the VRF program can call this, and like `settle_bet` it never fails on an answer nobody is waiting for.
+    pub fn bj_settle(ctx: Context<SettleBet>, randomness: [u8; 32], seq: u64, step: u8) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let mut p = ctx.accounts.player.load_mut()?;
+        let mut h = ctx.accounts.house.load_mut()?;
+        let (per_min, window) = (h.params.decay_per_min_milli, h.params.max_decay_window_s);
+        money::decay(&mut p, now, per_min, window);
+        if let Some(s) = blackjack::answer(&mut p, &mut h, &randomness, seq, step, now) {
+            let x = p.hand;
+            emit!(HandStep { wallet: p.authority, seq, step, action: s.action, player: x.player, n_player: x.n_player, dealer: x.dealer, n_dealer: x.n_dealer, randomness });
+            if let Some(d) = s.done {
+                emit!(BetSettled { wallet: p.authority, seq, game: games::BLACKJACK, pick: 0, wager: d.wager, payout: d.payout, blessing: d.blessing, luck_gain_milli: d.luck_gain_milli, outcome: d.outcome, jackpot: false, randomness });
+            }
+        }
         Ok(())
     }
 
@@ -416,6 +474,31 @@ fn touch(p: &mut Player, h: &mut House, purse: &Purse) -> Result<()> {
     }
     money::decay(p, Clock::get()?.unix_timestamp, h.params.decay_per_min_milli, h.params.max_decay_window_s);
     Ok(())
+}
+
+/// The request every bet makes. The answer can only come back to `callback`, with this player and the house.
+fn ask_oracle(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pubkey, callback: &[u8], caller_seed: [u8; 32], args: Vec<u8>) -> anchor_lang::solana_program::instruction::Instruction {
+    let meta = |k: Pubkey| SerializableAccountMeta { pubkey: k, is_signer: false, is_writable: true };
+    create_request_randomness_ix_const(
+        RequestRandomnessParams {
+            payer,
+            oracle_queue,
+            callback_program_id: crate::ID,
+            callback_discriminator: callback.to_vec(),
+            caller_seed,
+            accounts_metas: Some(vec![meta(player), meta(house)]),
+            callback_args: Some(args),
+            ..Default::default()
+        },
+        PROGRAM_IDENTITY,
+    )
+}
+fn ask_for_cards(payer: Pubkey, oracle_queue: Pubkey, player: Pubkey, house: Pubkey, client_seed: &[u8; 32], seq: u64, step: u8) -> anchor_lang::solana_program::instruction::Instruction {
+    let mut seed = bets::caller_seed(client_seed, &player.to_bytes(), seq);
+    seed[8] ^= step; // every step of a hand asks with a different seed
+    let mut args = seq.to_le_bytes().to_vec();
+    args.push(step);
+    ask_oracle(payer, oracle_queue, player, house, instruction::BjSettle::DISCRIMINATOR, seed, args)
 }
 
 fn pay_into_bank<'info>(from: &Signer<'info>, bank: &Account<'info, Bank>, system: &Program<'info, System>, lamports: u64) -> Result<()> {
@@ -500,6 +583,8 @@ pub struct CashedOut { pub wallet: Pubkey, pub lamports: u64, pub total: u64 }
 pub struct BetPlaced { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick: u8, pub wager: u64 }
 #[event]
 pub struct BetSettled { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick: u8, pub wager: u64, pub payout: u64, pub blessing: u64, pub luck_gain_milli: u32, pub outcome: [u8; 4], pub jackpot: bool, pub randomness: [u8; 32] }
+#[event]
+pub struct HandStep { pub wallet: Pubkey, pub seq: u64, pub step: u8, pub action: u8, pub player: [u8; 12], pub n_player: u8, pub dealer: [u8; 12], pub n_dealer: u8, pub randomness: [u8; 32] }
 #[event]
 pub struct BetRefunded { pub wallet: Pubkey, pub seq: u64, pub wager: u64 }
 #[event]
@@ -706,6 +791,23 @@ pub struct PlaceBet<'info> {
     #[account(seeds = [SEED_PURSE, authority.key().as_ref()], bump = purse.bump)]
     pub purse: Account<'info, Purse>,
     pub session_token: Option<Account<'info, SessionTokenV2>>,
+    /// CHECK: the rollup's VRF queue, and no other
+    #[account(mut, address = DEFAULT_EPHEMERAL_QUEUE)]
+    pub oracle_queue: UncheckedAccount<'info>,
+}
+
+/// No session and no player signature: it only does what `bj_idle_s` already allows.
+#[vrf]
+#[derive(Accounts)]
+pub struct StandIdle<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    /// CHECK: only seeds the PDA
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
     /// CHECK: the rollup's VRF queue, and no other
     #[account(mut, address = DEFAULT_EPHEMERAL_QUEUE)]
     pub oracle_queue: UncheckedAccount<'info>,

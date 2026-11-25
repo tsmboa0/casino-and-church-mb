@@ -11,6 +11,7 @@ export function detail(e: Pick<SettledEvent, 'game' | 'outcome' | 'jackpot'>): s
     case 'roulette': return `${o[0]} ${COLOUR[o[1]]}`;
     case 'wheel': return `WHEEL ${WHEEL[o[0]]}`;
     case 'harmony': return e.jackpot ? 'JACKPOT' : `HARMONY ${HARMONY[o[0]]}`;
+    case 'blackjack': return `${o[0]} v ${o[1]}${o[2] === 3 ? ' BLACKJACK' : o[3] ? ' DOUBLE' : ''}`;
     default: return '';
   }
 }

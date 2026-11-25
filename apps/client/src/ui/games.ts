@@ -2,7 +2,7 @@ import './games.css';
 import { store, clearProfile } from '../core/state';
 import { bus, type PanelKind } from '../core/bus';
 import { audio } from '../core/audio';
-import { type BetProof,
+import { type BetProof, type WheelResult,
   backend, BackendError, type BjState, type AgentDecision, type AgentId, type AgentProof, type CampaignRow, type RealmEvent,
   type MarketState, type MarketSide, type MarketResult, type MarketCrowdBet,
 } from '../core/backend';
@@ -167,15 +167,17 @@ function canCover(root: Root, chips: number, what: 'bet' | 'tithe' = 'bet'): boo
   audio.play('hit', 0.3);
   return false;
 }
+const proofLinks = (proof?: BetProof) => (proof ? `<br>${txLink(proof.placeTx, 'VIEW ON EXPLORER')}${backend.verifyBet ? '<a class="txl vfy" data-verify role="button" tabindex="0">VERIFY THIS BET</a>' : ''}` : '');
+const wireVerify = (root: Root, proof?: BetProof) => { if (proof) root.querySelector<HTMLElement>('[data-verify]')?.addEventListener('click', (ev) => { ev.stopPropagation(); hideResult(root); void verifyBetView(root, proof); }); };
 /** standard verdict from a bet result */
 function verdict(root: Root, wager: number, payout: number, blessing: number, what: string, proof?: BetProof) {
-  const link = proof ? `<br>${txLink(proof.placeTx, 'VIEW ON EXPLORER')}${backend.verifyBet ? '<a class="txl vfy" data-verify role="button" tabindex="0">VERIFY THIS BET</a>' : ''}` : '';
+  const link = proofLinks(proof);
   const sub = [what, blessing ? `Blessing +${blessing}` : ''].filter(Boolean).join(' · ') + link;
   if (payout <= 0) showResult(root, 'lose', 'YOU LOSE', wager, (what || 'Better luck next time') + link);
   else if (payout >= wager * 15) showResult(root, 'jackpot', 'JACKPOT!', payout, sub);
   else if (payout <= wager * 1.05) showResult(root, 'push', 'BET RETURNED', `+${fmt(payout)}`, sub);
   else showResult(root, 'win', 'YOU WIN!', payout, sub);
-  if (proof) root.querySelector<HTMLElement>('[data-verify]')?.addEventListener('click', (ev) => { ev.stopPropagation(); hideResult(root); void verifyBetView(root, proof); });
+  wireVerify(root, proof);
 }
 /** checks one bet from the chain, in the browser, and says what it found */
 async function verifyBetView(root: Root, proof: BetProof) {
@@ -188,7 +190,7 @@ async function verifyBetView(root: Root, proof: BetProof) {
     const c = await backend.verifyBet!(proof); if (!el.isConnected) return;
     const out = el.querySelector('#vb')!;
     if (!c.found) { out.innerHTML = row(null, 'The rollup has not listed this bet yet.', 'Try again in a moment'); return; }
-    out.innerHTML = row(c.fromVrf, 'Settled by the VRF program', c.fromVrf ? 'YES' : 'NO') + row(null, 'Random number', `${c.randomness.slice(0, 10)}&hellip;${c.randomness.slice(-8)}`) + row(null, 'Worked out here', c.recomputed) + row(c.matches, 'Recorded on chain', c.recorded) + row(c.fromVrf && c.matches, c.fromVrf && c.matches ? 'This bet was fair' : 'This does not add up', '');
+    out.innerHTML = row(c.fromVrf, 'Settled by the VRF program', c.fromVrf ? 'YES' : 'NO') + row(null, (c.answers ?? 1) > 1 ? `Random numbers: ${c.answers}, the last` : 'Random number', `${c.randomness.slice(0, 10)}&hellip;${c.randomness.slice(-8)}`) + row(null, 'Worked out here', c.recomputed) + row(c.matches, 'Recorded on chain', c.recorded) + row(c.fromVrf && c.matches, c.fromVrf && c.matches ? 'This bet was fair' : 'This does not add up', '');
     if (c.tx) el.querySelector('#vb-tx')!.innerHTML = txLink(c.tx, 'THE PROOF TRANSACTION');
   } catch (e) { const out = el.querySelector('#vb'); if (out) out.textContent = errText(e); }
 }
@@ -461,13 +463,16 @@ function blackjack(root: Root, close: () => void) {
   };
   const finish = async (s: BjState) => {
     state = s; await draw(true); setBal(root); spot();
-    const r = s.result!, busted = s.playerTotal > 21;
-    if (r.label === 'natural') showResult(root, 'jackpot', 'BLACKJACK!', r.payout, 'Pays 3 to 2');
-    else if (r.label === 'win') showResult(root, 'win', s.dealerTotal > 21 ? 'DEALER BUSTS!' : 'YOU WIN!', r.payout, `${s.playerTotal} beats ${s.dealerTotal}${r.blessing ? ` · Blessing +${r.blessing}` : ''}`);
-    else if (r.label === 'push') showResult(root, 'push', 'PUSH', `+${fmt(r.payout)}`, `${s.playerTotal} each. Your bet comes back.`);
-    else showResult(root, 'lose', busted ? 'BUST' : 'YOU LOSE', s.stake, busted ? `${s.playerTotal} is over 21` : `Dealer ${s.dealerTotal} beats ${s.playerTotal}`);
+    const r = s.result!, busted = s.playerTotal > 21, dealerBj = s.dealer.length === 2 && s.dealerTotal === 21, link = proofLinks(r.proof);
+    if (r.label === 'natural') showResult(root, 'jackpot', 'BLACKJACK!', r.payout, 'Pays 3 to 2' + link);
+    else if (r.label === 'win') showResult(root, 'win', s.dealerTotal > 21 ? 'DEALER BUSTS!' : 'YOU WIN!', r.payout, `${s.dealerTotal > 21 ? `Dealer ${s.dealerTotal}` : `${s.playerTotal} beats ${s.dealerTotal}`}${r.blessing ? ` · Blessing +${r.blessing}` : ''}${link}`);
+    else if (r.label === 'push') showResult(root, 'push', 'PUSH', `+${fmt(r.payout)}`, `${s.playerTotal} each. Your bet comes back.${link}`);
+    else showResult(root, 'lose', busted ? 'BUST' : 'YOU LOSE', s.stake - r.payout, (busted ? `${s.playerTotal} is over 21` : dealerBj ? `Dealer blackjack${r.payout ? '. Your double comes back' : ''}` : `Dealer ${s.dealerTotal} beats ${s.playerTotal}`) + link);
+    wireVerify(root, r.proof);
     state = null; mode();
   };
+  // a hand left open comes back with its cards
+  if (backend.blackjackOpen) { busy = true; void backend.blackjackOpen().then(async (s) => { if (!s || !root.querySelector('.bj')) return; state = s; bet = s.doubled ? s.stake / 2 : s.stake; spot(); await draw(); if (s.stage === 'done') await finish(s); else mode(); }).catch(() => {}).finally(() => { busy = false; }); }
   $(root, '#deal').addEventListener('click', async () => {
     if (busy || !canCover(root, bet)) return; busy = true; hideResult(root); state = null; await draw();
     const dealBtn = $(root, '#deal'); dealBtn.classList.add('pending'); (dealBtn as HTMLButtonElement).disabled = true;
@@ -506,7 +511,7 @@ function wheelSvg(segs: string[], colors: string[]) {
     <circle r="99" fill="#14101c"/><circle r="97" fill="url(#wg)"/>
     <g class="disc" id="disc">${slices}${pegs}<circle r="16" fill="url(#wg)" stroke="#6b4a10" stroke-width="2"/><circle r="6" fill="#c4202e"/></g></svg>`;
 }
-interface WheelCfg { theme: 'casino' | 'church'; title: string; segs: string[]; colors: string[]; meters: () => string; ready: () => boolean; why: () => string; spin: () => Promise<{ prize: number | 'JACKPOT'; chips: number }>; prizes: string; back?: () => void }
+interface WheelCfg { theme: 'casino' | 'church'; title: string; segs: string[]; colors: string[]; meters: () => string; ready: () => boolean; why: () => string; spin: () => Promise<WheelResult>; prizes: string; back?: () => void }
 function wheelPanel(root: Root, close: () => void, o: WheelCfg) {
   let busy = false, rot = 0;
   shell(root, close, o.theme, o.title, `
@@ -534,7 +539,7 @@ function wheelPanel(root: Root, close: () => void, o: WheelCfg) {
       snd((LAND - 300) / 1000);
       await sp.land([mod360(-(j * th + th / 2))], LAND); rot = sp.angles[0];
       $(root, '#flap').classList.remove('tick'); setBal(root);
-      showResult(root, r.prize === 'JACKPOT' || r.chips >= 500 ? 'jackpot' : 'win', r.prize === 'JACKPOT' ? 'JACKPOT!' : 'YOU WIN!', r.chips, o.title);
+      showResult(root, r.prize === 'JACKPOT' || r.chips >= 500 ? 'jackpot' : 'win', r.prize === 'JACKPOT' ? 'JACKPOT!' : 'YOU WIN!', r.chips, o.title + proofLinks(r.proof)); wireVerify(root, r.proof);
     } catch (e) { snd(0.8); await sp.land([mod360(rot)], 900); rot = sp.angles[0]; $(root, '#flap').classList.remove('tick'); oops(root, e); }
     finally { snd(); busy = false; show(); }
   });

@@ -1,6 +1,6 @@
 /**
  * Canonical game + economy rules (PURE functions, no UI, no randomness source of their own).
- * The Rust contract (contracts/realm) must reproduce every function here bit-for-bit; the
+ * The Solana program (onchain/programs/realm) must reproduce every function here bit-for-bit; the
  * conformance vectors in scripts/rtp_check.py and BACKEND_PLAN.md §6 prove it.
  *
  * Randomness: every game consumes `draws` = eight little-endian u32 values taken from
@@ -146,7 +146,7 @@ export const QUESTS: QuestDef[] = [
   { id: 'q-altar', bit: 4, title: 'Turn Luck to Faith', desc: 'Convert 20 LUCK at the Altar.', counter: 'converted', goal: 20, reward: { chips: 100 }, rewardText: '100 chips' },
 ];
 
-// ------------------------------------------------------------------------------------------ blackjack (mirrors contract blackjack.rs)
+// ------------------------------------------------------------------------------------------ blackjack (mirrors onchain blackjack.rs)
 /** cards are 0..51: rank = c % 13 (0 = A, 9..12 = T J Q K), suit = floor(c / 13) in C D H S. Names like "AS", "TD". */
 export const cardName = (c: number) => 'A23456789TJQK'[c % 13] + 'CDHS'[Math.floor(c / 13)];
 export function handTotal(cards: number[]): { total: number; soft: boolean } {
