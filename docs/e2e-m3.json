@@ -1,0 +1,125 @@
+{
+ "at": "2026-11-25T13:52:45.197Z",
+ "checks": {
+  "500 flips, 5 players at once": {
+   "pass": true,
+   "info": {
+    "done": 500,
+    "errs": {}
+   }
+  },
+  "every result follows from its randomness": {
+   "pass": true,
+   "info": {
+    "wrong": 0
+   }
+  },
+  "median under 1.5 s": {
+   "pass": true,
+   "info": {
+    "p50": 639,
+    "p95": 751,
+    "max": 1639
+   }
+  },
+  "heads and tails look fair": {
+   "pass": true,
+   "info": {
+    "heads": 280,
+    "done": 500,
+    "z": 2.68,
+    "wins": 259
+   }
+  },
+  "books balanced throughout": {
+   "pass": true,
+   "info": ""
+  },
+  "slots: 12 bets match the rules": {
+   "pass": true,
+   "info": {
+    "n": 12,
+    "bad": 0
+   }
+  },
+  "dice: 12 bets match the rules": {
+   "pass": true,
+   "info": {
+    "n": 12,
+    "bad": 0
+   }
+  },
+  "roulette: 12 bets match the rules": {
+   "pass": true,
+   "info": {
+    "n": 12,
+    "bad": 0
+   }
+  },
+  "cu": 31956,
+  "settled inside the VRF program": {
+   "pass": true,
+   "info": {
+    "cu": 31956
+   }
+  },
+  "a bet the table does not offer": {
+   "pass": true,
+   "info": "BadWager"
+  },
+  "a pick that does not exist": {
+   "pass": true,
+   "info": "BadPick"
+  },
+  "wheel without LUCK": {
+   "pass": true,
+   "info": "LuckLow"
+  },
+  "blackjack through place_bet": {
+   "pass": true,
+   "info": "BadPick"
+  },
+  "no chips": {
+   "pass": true,
+   "info": "NoChips"
+  },
+  "a stranger betting your chips": {
+   "pass": true,
+   "info": "BadSession"
+  },
+  "settling a bet yourself": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "refund with nothing pending": {
+   "pass": true,
+   "info": "NothingPending"
+  },
+  "a fake oracle queue": {
+   "pass": true,
+   "info": "custom_2012"
+  },
+  "two bets and an early refund at once leave things consistent": {
+   "pass": true,
+   "info": [
+    "ok",
+    "ok",
+    "NothingPending"
+   ]
+  },
+  "nothing left reserved": {
+   "pass": true,
+   "info": {
+    "reserved": "0"
+   }
+  },
+  "final books": {
+   "pass": true,
+   "info": {
+    "vault": 5041,
+    "treasury": 280.1,
+    "jackpot": 215.05
+   }
+  }
+ }
+}

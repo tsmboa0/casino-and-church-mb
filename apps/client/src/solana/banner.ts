@@ -4,6 +4,6 @@ export function rollupBanner(on: boolean) {
   if (on === !!el) return;
   if (!on) { el?.remove(); el = null; return; }
   el = document.createElement('div'); el.id = 'rollup-banner'; el.setAttribute('role', 'status');
-  el.innerHTML = '<b>THE TABLES ARE PAUSED</b><span>The rollup is updating. Your chips are safe. This clears by itself.</span>';
+  el.innerHTML = '<b>THE TABLES ARE PAUSED</b><span>The rollup is catching its breath. Your chips and bets are safe. This clears by itself.</span>';
   document.body.appendChild(el);
 }

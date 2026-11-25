@@ -33,4 +33,18 @@ pub enum RealmError {
     BadName,
     #[msg("arithmetic overflow")]
     Overflow,
+    #[msg("bad pick for this game")]
+    BadPick,
+    #[msg("that bet is not offered")]
+    BadWager,
+    #[msg("above the table limit")]
+    MaxBet,
+    #[msg("not enough LUCK")]
+    LuckLow,
+    #[msg("not enough FAITH")]
+    FaithLow,
+    #[msg("nothing is pending")]
+    NothingPending,
+    #[msg("too early")]
+    TooEarly,
 }

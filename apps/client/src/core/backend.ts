@@ -22,8 +22,11 @@ export interface BetReq { game: Game; wager: number; pick?: number; machineId?: 
 export interface BetResult {
   betId: number; game: Game; wager: number; payout: number; net: number; blessing: number; luckGain: number;
   outcome: { reels?: string[]; side?: 'H' | 'T'; dice?: [number, number]; n?: number; color?: string };
-  proof?: { serverSeed: string; clientSeed: string; chainSeed: string; txHash: string };   // chain mode only
+  proof?: BetProof;   // chain mode only
 }
+/** what a player needs to check a bet: its number and the randomness that settled it */
+export interface BetProof { seq: string; randomness: string; clientSeed: string; placeTx: string }
+export interface BetCheck { found: boolean; tx: string | null; randomness: string; fromVrf: boolean; recomputed: string; recorded: string; matches: boolean }
 export interface WheelResult { prize: number | 'JACKPOT'; chips: number }
 /** a blackjack hand as the panel draws it (chain: built from get_blackjack + the settled result) */
 export interface BjState {
@@ -133,6 +136,10 @@ export interface Backend {
   setup?(step?: (text: string) => void): Promise<void>;
   saveName?(name: string, avatar: string): Promise<void>;
   toursDone?(): { casino: boolean; church: boolean };
+  /** OPTIONAL (Solana): re-checks a settled bet from the chain, in the browser */
+  verifyBet?(p: BetProof): Promise<BetCheck>;
+  /** link to a transaction */
+  txUrl?(sig: string): string;
   /** OPTIONAL: re-read balances from the chain before acting on them */
   sync?(): Promise<void>;
   /** OPTIONAL: this device's guest wallet (chain mode) */

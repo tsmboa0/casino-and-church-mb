@@ -7,7 +7,7 @@ export const CHIP = 1_000_000n;                                     // lamports:
 export const CHIPS_PER_SOL = 1000;
 export const P = {
   system: '11111111111111111111111111111111', delegation: 'DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh', magic: 'Magic11111111111111111111111111111111111111', magicContext: 'MagicContext1111111111111111111111111111111',
-  session: 'KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5', loader: 'BPFLoaderUpgradeab1e11111111111111111111111', computeBudget: 'ComputeBudget111111111111111111111111111111',
+  session: 'KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5', vrf: 'Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz', vrfQueue: '5hBR571xnXppuCPveTrctfTU7tJLSN94nq7kv7FRK5Tc', slotHashes: 'SysvarS1otHashes111111111111111111111111111', loader: 'BPFLoaderUpgradeab1e11111111111111111111111', computeBudget: 'ComputeBudget111111111111111111111111111111',
 } as const;
 const k = (a: string) => b58decode(a);
 export const addr = {
@@ -16,7 +16,7 @@ export const addr = {
   sessionToken: (w: string, session: string) => pda(['session_token_v2', k(REALM), k(session), k(w)], P.session),
   programData: () => pda([k(REALM)], P.loader),
 };
-const fixed = (): Record<string, string> => ({ config: addr.config(), bank: addr.bank(), house_purse: addr.housePurse(), house: addr.house(), system_program: P.system, owner_program: REALM, delegation_program: P.delegation, magic_program: P.magic, magic_context: P.magicContext, program_id: REALM, program: REALM, program_data: addr.programData() });
+const fixed = (): Record<string, string> => ({ config: addr.config(), bank: addr.bank(), house_purse: addr.housePurse(), house: addr.house(), system_program: P.system, owner_program: REALM, delegation_program: P.delegation, magic_program: P.magic, magic_context: P.magicContext, program_id: REALM, program: REALM, program_data: addr.programData(), oracle_queue: P.vrfQueue, vrf_program: P.vrf, slot_hashes: P.slotHashes, program_identity: pda(['identity'], REALM) });
 
 /** an instruction of our program. Accounts follow the IDL; the delegation helpers are derived from the account they serve. */
 export function realmIx(name: string, accounts: Record<string, string> = {}, args: Uint8Array = new Uint8Array()): Ix {
@@ -49,6 +49,8 @@ export const ix = {
   setProfile: (w: string, signer: string, name: string, avatar: string) => realmIx('set_profile', play(w, signer), concat(str(name), str(avatar))),
   enterRealm: (w: string, signer: string, realm: number) => realmIx('enter_realm', play(w, signer), u8(realm)),
   completeTour: (w: string, signer: string, realm: number) => realmIx('complete_tour', play(w, signer), u8(realm)),
+  placeBet: (w: string, signer: string, game: number, chips: number, pick: number, clientSeed: Uint8Array) => realmIx('place_bet', play(w, signer), concat(u8(game), u64(chips), u8(pick), clientSeed)),
+  refundStale: (w: string) => realmIx('refund_stale', { authority: w, player: addr.player(w) }),
   /** SessionTokenV2: the wallet, the session key and whoever pays all sign. No SOL goes to the session key. */
   createSession: (w: string, session: string, feePayer: string, validUntil: number): Ix => ({
     program: P.session, data: concat(sha256(utf8('global:create_session_v2')).slice(0, 8), Uint8Array.of(1, 0, 1), i64(validUntil), u8(0)),
@@ -64,14 +66,21 @@ class Reader { o = 8; v: DataView; constructor(public d: Uint8Array) { this.v = 
   u64() { const n = this.v.getBigUint64(this.o, true); this.o += 8; return n; } i64() { const n = Number(this.v.getBigInt64(this.o, true)); this.o += 8; return n; }
   key() { const a = b58encode(this.d.subarray(this.o, this.o + 32)); this.o += 32; return a; } raw(n: number) { const b = this.d.slice(this.o, this.o + n); this.o += n; return b; }
   text(n: number) { const b = this.raw(n); const z = b.indexOf(0); return new TextDecoder().decode(z < 0 ? b : b.subarray(0, z)); } skip(n: number) { this.o += n; } }
-export interface PlayerState { authority: string; chips: bigint; credited: bigint; withdrawn: bigint; withdrawnBooked: bigint; lastUpdate: number; lastRealmChange: number; candleAt: number; harmonyAt: number; lastAlms: number; wagered: bigint; tithed: bigint; convertedMilli: bigint; faithEarnedMilli: bigint; betSeq: bigint; luckMilli: number; faithMilli: number; questsClaimed: number; spins: number; flips: number; dice: number; roulette: number; blackjack: number; candles: number; timeouts: number; commits: number; realm: number; tourFlags: number; welcomeClaimed: boolean; plotGate: boolean; name: string; avatar: string; pendingActive: boolean }
+export interface PlayerState { authority: string; chips: bigint; credited: bigint; withdrawn: bigint; withdrawnBooked: bigint; lastUpdate: number; lastRealmChange: number; candleAt: number; harmonyAt: number; lastAlms: number; wagered: bigint; tithed: bigint; convertedMilli: bigint; faithEarnedMilli: bigint; betSeq: bigint; luckMilli: number; faithMilli: number; questsClaimed: number; spins: number; flips: number; dice: number; roulette: number; blackjack: number; candles: number; timeouts: number; commits: number; realm: number; tourFlags: number; welcomeClaimed: boolean; plotGate: boolean; name: string; avatar: string; pendingActive: boolean; pending: { seq: bigint; wager: bigint; placedTs: number; clientSeed: Uint8Array; game: number; pick: number } | null; recent: BetResultState[]; lastVrf: Uint8Array; lastVrfSeq: bigint }
+export interface BetResultState { seq: bigint; wager: bigint; payout: bigint; ts: number; luckGainMilli: number; outcome: number[]; blessingChips: number; game: number; jackpot: boolean }
+export const GAME = { slots: 0, coinflip: 1, dice: 2, roulette: 3, wheel: 4, harmony: 5, blackjack: 6, market: 7 } as const;
+export const GAME_NAMES = Object.keys(GAME) as (keyof typeof GAME)[];
 export function decodePlayer(d: Uint8Array): PlayerState | null {
   if (d.length < 1176 || !has(d, 'Player')) return null;
   const r = new Reader(d); const authority = r.key(), chips = r.u64(), credited = r.u64(), withdrawn = r.u64(), withdrawnBooked = r.u64();
   const lastUpdate = r.i64(), lastRealmChange = r.i64(), candleAt = r.i64(), harmonyAt = r.i64(), lastAlms = r.i64(); const wagered = r.u64(), tithed = r.u64(), convertedMilli = r.u64(), faithEarnedMilli = r.u64(); r.u64(); const betSeq = r.u64();
   const luckMilli = r.u32(), faithMilli = r.u32(), questsClaimed = r.u32(); r.skip(12); const spins = r.u32(), flips = r.u32(), dice = r.u32(), roulette = r.u32(), blackjack = r.u32(), candles = r.u32(), timeouts = r.u32(), commits = r.u32();
-  const realm = r.u8(), tourFlags = r.u8(), flags = r.u8(); r.skip(5); const name = r.text(16), avatar = r.text(24); r.skip(32 + 24); const pendingActive = d[r.o + 75] !== 0;
-  return { authority, chips, credited, withdrawn, withdrawnBooked, lastUpdate, lastRealmChange, candleAt, harmonyAt, lastAlms, wagered, tithed, convertedMilli, faithEarnedMilli, betSeq, luckMilli, faithMilli, questsClaimed, spins, flips, dice, roulette, blackjack, candles, timeouts, commits, realm, tourFlags, welcomeClaimed: !!(flags & 1), plotGate: !!(flags & 2), name, avatar, pendingActive };
+  const realm = r.u8(), tourFlags = r.u8(), flags = r.u8(); r.skip(5); const name = r.text(16), avatar = r.text(24); r.skip(32 + 24); const p0 = r.o, pendingActive = d[p0 + 75] !== 0;
+  const pSeq = r.u64(), pWager = r.u64(); r.skip(16); const placedTs = r.i64(), clientSeed = r.raw(32); const pending = pendingActive ? { seq: pSeq, wager: pWager, placedTs, clientSeed, game: d[p0 + 72], pick: d[p0 + 73] } : null;
+  r.o = p0 + 80 + 80 + 256; const recent: BetResultState[] = [];
+  for (let i = 0; i < 8; i++) { const seq = r.u64(), wager = r.u64(), payout = r.u64(), ts = r.u32(), luckGainMilli = r.u32(), outcome = [...r.raw(4)], blessingChips = r.u16(), game = r.u8(), flags = r.u8(); if (seq) recent.push({ seq, wager, payout, ts, luckGainMilli, outcome, blessingChips, game, jackpot: !!(flags & 1) }); }
+  recent.sort((a, b) => (a.seq < b.seq ? 1 : -1)); const lastVrf = r.raw(32), lastVrfSeq = r.u64();
+  return { authority, chips, credited, withdrawn, withdrawnBooked, lastUpdate, lastRealmChange, candleAt, harmonyAt, lastAlms, wagered, tithed, convertedMilli, faithEarnedMilli, betSeq, luckMilli, faithMilli, questsClaimed, spins, flips, dice, roulette, blackjack, candles, timeouts, commits, realm, tourFlags, welcomeClaimed: !!(flags & 1), plotGate: !!(flags & 2), name, avatar, pendingActive, pending, recent, lastVrf, lastVrfSeq };
 }
 export interface PurseState { owner: string; deposited: bigint; paidOut: bigint; lastDepositTs: number }
 export function decodePurse(d: Uint8Array): PurseState | null { if (d.length < 60 || !has(d, 'Purse')) return null; const r = new Reader(d); return { owner: r.key(), deposited: r.u64(), paidOut: r.u64(), lastDepositTs: r.i64() }; }
@@ -85,5 +94,15 @@ export function decodeHouse(d: Uint8Array): HouseState | null {
   const allowedWagers: number[] = []; for (let i = 0; i < 8; i++) if (par(18 + i)) allowedWagers.push(par(18 + i)); r.o = p0 + 26 * 4; const totalPlayers = r.u64(), paused = r.u8() !== 0;
   return { vault, reserved, treasury, jackpot, machineTotal, escrowTotal, chipsOutstanding, totalCredited, totalWithdrawn, welcomePaid, maxBetChips: par(9), welcomeChips: par(8), allowedWagers, totalPlayers, paused };
 }
+// ---------------------------------------------------------------- events ("Program data: ..." in the logs)
+export interface SettledEvent { wallet: string; seq: bigint; game: number; pick: number; wager: bigint; payout: bigint; blessing: bigint; luckGainMilli: number; outcome: number[]; jackpot: boolean; randomness: Uint8Array }
+export function settledFromLogs(logs: string[], decode64: (s: string) => Uint8Array): SettledEvent[] {
+  const out: SettledEvent[] = [], disc = IDL.events.BetSettled as readonly number[];
+  for (const l of logs) { if (!l.startsWith('Program data: ')) continue; let d: Uint8Array; try { d = decode64(l.slice(14).trim()); } catch { continue; } if (d.length < 8 + 32 + 8 + 2 + 24 + 4 + 4 + 1 + 32 || !disc.every((b, i) => d[i] === b)) continue;
+    const r = new Reader(d); out.push({ wallet: r.key(), seq: r.u64(), game: r.u8(), pick: r.u8(), wager: r.u64(), payout: r.u64(), blessing: r.u64(), luckGainMilli: r.u32(), outcome: [...r.raw(4)], jackpot: r.u8() !== 0, randomness: r.raw(32) }); }
+  return out;
+}
+/** 32 random bytes -> eight draws, exactly as the program does it */
+export const drawsOf = (h: Uint8Array): number[] => { const v = new DataView(h.buffer, h.byteOffset, 32); return Array.from({ length: 8 }, (_, i) => v.getUint32(i * 4, true)); };
 /** "Custom": 6001 -> "NotAllowed" */
 export const errorName = (code: number): string | null => (IDL.errors as Record<string, string>)[String(code)] ?? null;

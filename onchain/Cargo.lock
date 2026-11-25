@@ -1717,6 +1717,7 @@ dependencies = [
  "anchor-lang",
  "bytemuck",
  "ephemeral-rollups-sdk",
+ "serde_json",
  "session-keys",
  "solana-instructions-sysvar 3.0.1",
 ]

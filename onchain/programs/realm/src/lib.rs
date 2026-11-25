@@ -1,23 +1,57 @@
 //! The Casino & The Church. SOL stays on L1 (Bank, Purse); play happens on a MagicBlock Ephemeral Rollup (House, Player).
 
 use anchor_lang::prelude::*;
-use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral};
+use anchor_lang::Discriminator;
+use ephemeral_rollups_sdk::anchor::{commit, delegate, ephemeral, vrf};
 use ephemeral_rollups_sdk::cpi::DelegateConfig;
 use ephemeral_rollups_sdk::ephem::{CallHandler, MagicIntentBundleBuilder};
+use ephemeral_rollups_sdk::vrf::consts::{program_identity_pubkey, scoped_vrf_identity_const, DEFAULT_EPHEMERAL_QUEUE};
+use ephemeral_rollups_sdk::vrf::instructions::{create_request_randomness_ix_const, RequestRandomnessParams};
+use ephemeral_rollups_sdk::vrf::types::SerializableAccountMeta;
 use ephemeral_rollups_sdk::{ActionArgs, ShortAccountMeta};
 use session_keys::SessionTokenV2;
 
+pub mod bets;
 pub mod constants;
 pub mod error;
+pub mod games;
 pub mod money;
 pub mod state;
 
+use bets::BetError;
 use constants::*;
 use error::RealmError;
 use money::MoneyError;
 use state::*;
 
 declare_id!("6uoz1h2ZWQMgniDx2vKEvh6bHtgCoFoGegfVtNW1q6cX");
+
+/// who may ask for randomness for us, and who may answer. Both worked out at COMPILE time: SDK 0.18.0's #[vrf_callback]
+/// derives the answerer at runtime and uses up the whole compute budget (docs/spike.md), so it must not be used.
+const PROGRAM_IDENTITY: Pubkey = program_identity_pubkey(&crate::ID);
+const VRF_IDENTITY: Pubkey = Pubkey::new_from_array(scoped_vrf_identity_const(&crate::ID).0);
+
+impl From<BetError> for RealmError {
+    fn from(e: BetError) -> Self {
+        match e {
+            BetError::Busy => RealmError::BetPending,
+            BetError::BadPick => RealmError::BadPick,
+            BetError::BadWager => RealmError::BadWager,
+            BetError::MaxBet => RealmError::MaxBet,
+            BetError::NoChips => RealmError::NoChips,
+            BetError::LuckLow => RealmError::LuckLow,
+            BetError::FaithLow => RealmError::FaithLow,
+            BetError::Cooldown => RealmError::Cooldown,
+            BetError::VaultLow => RealmError::VaultLow,
+            BetError::NothingPending => RealmError::NothingPending,
+            BetError::TooEarly => RealmError::TooEarly,
+            BetError::Overflow => RealmError::Overflow,
+        }
+    }
+}
+fn bet_ok<T>(r: core::result::Result<T, BetError>) -> Result<T> {
+    r.map_err(|e| error!(RealmError::from(e)))
+}
 
 impl From<MoneyError> for RealmError {
     fn from(e: MoneyError) -> Self {
@@ -261,6 +295,62 @@ pub mod realm {
         Ok(())
     }
 
+    // ================================================================ rollup: bets
+
+    /// Takes the stake, reserves the most it can pay, and asks the oracle for randomness. `settle_bet` answers.
+    pub fn place_bet(ctx: Context<PlaceBet>, game: u8, chips: u64, pick: u8, client_seed: [u8; 32]) -> Result<()> {
+        authorize(&ctx.accounts.signer.key(), &ctx.accounts.authority.key(), ctx.accounts.session_token.as_ref())?;
+        let now = Clock::get()?.unix_timestamp;
+        let (seq, seed) = {
+            let mut p = ctx.accounts.player.load_mut()?;
+            let mut h = ctx.accounts.house.load_mut()?;
+            touch(&mut p, &mut h, &ctx.accounts.purse)?;
+            let seq = bet_ok(bets::place(&mut p, &mut h, game, chips, pick, client_seed, now))?;
+            emit!(BetPlaced { wallet: p.authority, seq, game, pick, wager: chips * CHIP });
+            (seq, bets::caller_seed(&client_seed, &ctx.accounts.player.key().to_bytes(), seq))
+        };
+        let meta = |k: Pubkey| SerializableAccountMeta { pubkey: k, is_signer: false, is_writable: true };
+        let ix = create_request_randomness_ix_const(
+            RequestRandomnessParams {
+                payer: ctx.accounts.signer.key(),
+                oracle_queue: ctx.accounts.oracle_queue.key(),
+                callback_program_id: crate::ID,
+                callback_discriminator: instruction::SettleBet::DISCRIMINATOR.to_vec(),
+                caller_seed: seed,
+                accounts_metas: Some(vec![meta(ctx.accounts.player.key()), meta(ctx.accounts.house.key())]),
+                callback_args: Some(seq.to_le_bytes().to_vec()),
+                ..Default::default()
+            },
+            PROGRAM_IDENTITY,
+        );
+        ctx.accounts.invoke_signed_vrf(&ctx.accounts.signer.to_account_info(), &ix)?;
+        Ok(())
+    }
+
+    /// Only the VRF program can call this. It never fails on an answer nobody is waiting for: a failing callback would
+    /// be retried over and over.
+    pub fn settle_bet(ctx: Context<SettleBet>, randomness: [u8; 32], seq: u64) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let mut p = ctx.accounts.player.load_mut()?;
+        let mut h = ctx.accounts.house.load_mut()?;
+        let (per_min, window) = (h.params.decay_per_min_milli, h.params.max_decay_window_s);
+        money::decay(&mut p, now, per_min, window);
+        if let Some(s) = bets::settle(&mut p, &mut h, &randomness, seq, now) {
+            emit!(BetSettled { wallet: p.authority, seq: s.seq, game: s.game, pick: s.pick, wager: s.wager, payout: s.payout, blessing: s.blessing, luck_gain_milli: s.luck_gain_milli, outcome: s.outcome, jackpot: s.jackpot, randomness });
+        }
+        Ok(())
+    }
+
+    /// The oracle did not answer in time. Anyone may call it; everything goes back to the player.
+    pub fn refund_stale(ctx: Context<Refund>) -> Result<()> {
+        let now = Clock::get()?.unix_timestamp;
+        let mut p = ctx.accounts.player.load_mut()?;
+        let mut h = ctx.accounts.house.load_mut()?;
+        let (seq, wager) = bet_ok(bets::refund(&mut p, &mut h, now))?;
+        emit!(BetRefunded { wallet: p.authority, seq, wager });
+        Ok(())
+    }
+
     // ================================================================ rollup: the player's own things
 
     pub fn set_profile(ctx: Context<Play>, name: String, avatar: String) -> Result<()> {
@@ -406,6 +496,12 @@ pub struct Credited { pub wallet: Pubkey, pub lamports: u64, pub total: u64 }
 pub struct Welcomed { pub wallet: Pubkey, pub lamports: u64 }
 #[event]
 pub struct CashedOut { pub wallet: Pubkey, pub lamports: u64, pub total: u64 }
+#[event]
+pub struct BetPlaced { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick: u8, pub wager: u64 }
+#[event]
+pub struct BetSettled { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick: u8, pub wager: u64, pub payout: u64, pub blessing: u64, pub luck_gain_milli: u32, pub outcome: [u8; 4], pub jackpot: bool, pub randomness: [u8; 32] }
+#[event]
+pub struct BetRefunded { pub wallet: Pubkey, pub seq: u64, pub wager: u64 }
 #[event]
 pub struct Paid { pub wallet: Pubkey, pub lamports: u64, pub total: u64, pub owed: u64 }
 
@@ -594,6 +690,46 @@ pub fn authorize(signer: &Pubkey, authority: &Pubkey, token: Option<&Account<Ses
         RealmError::BadSession
     );
     Ok(())
+}
+
+#[vrf]
+#[derive(Accounts)]
+pub struct PlaceBet<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+    /// CHECK: whose player this is; proven by `authorize`
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(seeds = [SEED_PURSE, authority.key().as_ref()], bump = purse.bump)]
+    pub purse: Account<'info, Purse>,
+    pub session_token: Option<Account<'info, SessionTokenV2>>,
+    /// CHECK: the rollup's VRF queue, and no other
+    #[account(mut, address = DEFAULT_EPHEMERAL_QUEUE)]
+    pub oracle_queue: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SettleBet<'info> {
+    /// only the VRF program, answering a request this program made, can sign for this
+    #[account(address = VRF_IDENTITY @ RealmError::NotAllowed)]
+    pub vrf_program_identity: Signer<'info>,
+    #[account(mut)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut)]
+    pub house: AccountLoader<'info, House>,
+}
+
+#[derive(Accounts)]
+pub struct Refund<'info> {
+    /// CHECK: only seeds the PDA
+    pub authority: UncheckedAccount<'info>,
+    #[account(mut, seeds = [SEED_PLAYER, authority.key().as_ref()], bump)]
+    pub player: AccountLoader<'info, Player>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
 }
 
 #[commit]

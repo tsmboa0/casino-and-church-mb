@@ -1,0 +1,363 @@
+//! Placing, settling and refunding a bet. Pure: no accounts, no CPI.
+//!
+//! Place:  player -wager, vault +wager, reserve the most it can pay.
+//! Settle: release the reserve, send the church and jackpot their share, pay the player.
+//! Refund: the exact reverse of placing. Shares are taken when a bet SETTLES, so a refund never has to take them back.
+
+use crate::constants::{CHIP, DAY_S, METER_MAX};
+use crate::games::*;
+use crate::money::vault_free;
+use crate::state::{BetResult, House, PendingBet, Player};
+
+pub const TREASURY_BPS: u64 = 50;
+pub const JACKPOT_BPS: u64 = 25;
+pub const JACKPOT_FLOOR: u64 = 150 * CHIP;
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum BetError {
+    Busy,
+    BadPick,
+    BadWager,
+    MaxBet,
+    NoChips,
+    LuckLow,
+    FaithLow,
+    Cooldown,
+    VaultLow,
+    NothingPending,
+    TooEarly,
+    Overflow,
+}
+type R<T> = core::result::Result<T, BetError>;
+
+pub fn bps(amount: u64, b: u64) -> u64 {
+    (u128::from(amount) * u128::from(b) / 10_000) as u64
+}
+fn wager_allowed(h: &House, chips: u64) -> R<()> {
+    if chips == 0 || !h.params.allowed_wagers.iter().any(|w| *w != 0 && u64::from(*w) == chips) {
+        return Err(BetError::BadWager);
+    }
+    if chips > u64::from(h.params.max_bet_chips) || chips > vault_free(h) / CHIP / 200 {
+        return Err(BetError::MaxBet);
+    }
+    Ok(())
+}
+
+pub fn place(p: &mut Player, h: &mut House, game: u8, chips: u64, pick: u8, client_seed: [u8; 32], now: i64) -> R<u64> {
+    if p.busy() {
+        return Err(BetError::Busy);
+    }
+    if game > HARMONY || !valid_pick(game, pick) {
+        return Err(BetError::BadPick);
+    }
+    let wager = chips.checked_mul(CHIP).ok_or(BetError::Overflow)?;
+    let cost = h.params.harmony_cost_milli;
+    match game {
+        WHEEL => {
+            if chips != 0 { return Err(BetError::BadWager); }
+            if p.luck_milli < METER_MAX { return Err(BetError::LuckLow); }
+        }
+        HARMONY => {
+            if chips != 0 { return Err(BetError::BadWager); }
+            if p.luck_milli < cost.max(METER_MAX / 2) { return Err(BetError::LuckLow); }
+            if p.faith_milli < cost.max(METER_MAX / 2) { return Err(BetError::FaithLow); }
+            if now < p.harmony_at + i64::from(h.params.harmony_cooldown_s) { return Err(BetError::Cooldown); }
+        }
+        _ => {
+            wager_allowed(h, chips)?;
+            if p.chips < wager { return Err(BetError::NoChips); }
+        }
+    }
+    let max = max_payout(game, wager);
+    // the bet itself counts towards covering it
+    if h.vault.checked_add(wager).ok_or(BetError::Overflow)? < h.reserved.checked_add(max).ok_or(BetError::Overflow)? {
+        return Err(BetError::VaultLow);
+    }
+    let blessing = blessing_bps(p.faith_milli);
+    p.chips -= wager;
+    h.chips_outstanding -= wager;
+    h.vault += wager;
+    h.reserved += max;
+    match game {
+        WHEEL => p.luck_milli -= METER_MAX,
+        HARMONY => {
+            p.luck_milli -= cost;
+            p.faith_milli -= cost;
+            p.harmony_at = now;
+        }
+        _ => {}
+    }
+    p.bet_seq += 1;
+    p.pending = PendingBet { seq: p.bet_seq, wager, hold: max, max_payout: max, placed_ts: now, client_seed, game, pick, plot: 0, active: 1, blessing_bps: blessing, _pad: 0 };
+    Ok(p.bet_seq)
+}
+
+/// What the chain asks the oracle to use: the player's bytes, the player, and the bet, so nobody picks it alone.
+pub fn caller_seed(client_seed: &[u8; 32], player: &[u8; 32], seq: u64) -> [u8; 32] {
+    let mut s = *client_seed;
+    for i in 0..32 { s[i] ^= player[i]; }
+    for (i, b) in seq.to_le_bytes().iter().enumerate() { s[i] ^= b; }
+    s
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct Settled {
+    pub seq: u64,
+    pub game: u8,
+    pub pick: u8,
+    pub wager: u64,
+    pub payout: u64,
+    pub blessing: u64,
+    pub luck_gain_milli: u32,
+    pub outcome: [u8; 4],
+    pub jackpot: bool,
+}
+
+pub fn luck_award(h: &House, chips: u64, now: i64) -> u32 {
+    let mut raw = chips.saturating_mul(u64::from(h.params.luck_per_chip_milli));
+    let mut cap = u64::from(h.params.luck_per_bet_cap_milli);
+    let e = &h.events[0];
+    if e.active != 0 && now < e.ends {
+        raw = raw.saturating_mul(10_000 + u64::from(e.boost_bps)) / 10_000;
+        cap = cap * 3 / 2;
+    }
+    raw.min(cap) as u32
+}
+pub fn add_luck(p: &mut Player, gain: u32) -> u32 {
+    let applied = gain.min(METER_MAX - p.luck_milli.min(METER_MAX));
+    p.luck_milli += applied;
+    applied
+}
+/// From the treasury, in whole chips, within the day's cap.
+pub fn take_blessing(h: &mut House, base: u64, b: u16, now: i64) -> u64 {
+    let want = base / CHIP * u64::from(b) / 10_000;
+    if want == 0 { return 0; }
+    let day = now.div_euclid(DAY_S);
+    if h.blessing_day != day {
+        h.blessing_day = day;
+        h.blessing_spent = 0;
+        h.blessing_cap = bps(h.treasury, u64::from(h.params.blessing_day_cap_bps));
+    }
+    let give = want.min(h.blessing_cap.saturating_sub(h.blessing_spent) / CHIP).min(h.treasury / CHIP) * CHIP;
+    h.treasury -= give;
+    h.blessing_spent += give;
+    give
+}
+
+/// None when this answer is for nothing we are waiting for (late, repeated, or already refunded): then nothing changes.
+pub fn settle(p: &mut Player, h: &mut House, randomness: &[u8; 32], seq: u64, now: i64) -> Option<Settled> {
+    let b = p.pending;
+    if b.active == 0 || b.seq != seq { return None; }
+    p.pending = PendingBet { active: 0, ..bytemuck::Zeroable::zeroed() }; // first: a repeat finds nothing
+    h.reserved = h.reserved.saturating_sub(b.hold);
+    let r = resolve(b.game, &draws_of(randomness), b.pick, b.wager);
+    // the church's and the jackpot's share of the stake
+    let (t, j) = (bps(b.wager, TREASURY_BPS).min(h.vault), bps(b.wager, JACKPOT_BPS));
+    h.vault -= t;
+    h.treasury += t;
+    let j = j.min(h.vault);
+    h.vault -= j;
+    h.jackpot += j;
+    let (base, blessing) = if r.jackpot {
+        let mut pot = h.jackpot;
+        h.jackpot = 0;
+        let top = JACKPOT_FLOOR.saturating_sub(pot).min(vault_free(h));
+        h.vault -= top;
+        pot += top;
+        // whole chips only; the dust stays in the pot
+        let pay = pot / CHIP * CHIP;
+        h.jackpot = pot - pay;
+        (pay, 0)
+    } else {
+        let pay = r.base.min(h.vault);
+        h.vault -= pay;
+        (pay, take_blessing(h, pay, b.blessing_bps, now))
+    };
+    let payout = base + blessing;
+    p.chips += payout;
+    h.chips_outstanding += payout;
+    let luck = add_luck(p, luck_award(h, b.wager / CHIP, now));
+    match b.game {
+        SLOTS => p.spins = p.spins.saturating_add(1),
+        COIN => p.flips = p.flips.saturating_add(1),
+        DICE => p.dice = p.dice.saturating_add(1),
+        ROULETTE => p.roulette = p.roulette.saturating_add(1),
+        _ => {}
+    }
+    p.wagered = p.wagered.saturating_add(b.wager);
+    p.last_vrf = *randomness;
+    p.last_vrf_seq = seq;
+    let i = usize::from(p.recent_head) % p.recent.len();
+    p.recent[i] = BetResult { seq, wager: b.wager, payout, ts: now as u32, luck_gain_milli: luck, outcome: r.outcome, blessing_chips: (blessing / CHIP).min(u64::from(u16::MAX)) as u16, game: b.game, flags: u8::from(r.jackpot) };
+    p.recent_head = ((i + 1) % p.recent.len()) as u8;
+    Some(Settled { seq, game: b.game, pick: b.pick, wager: b.wager, payout, blessing, luck_gain_milli: luck, outcome: r.outcome, jackpot: r.jackpot })
+}
+
+/// The oracle never answered. Everything the bet took comes back.
+pub fn refund(p: &mut Player, h: &mut House, now: i64) -> R<(u64, u64)> {
+    let b = p.pending;
+    if b.active == 0 { return Err(BetError::NothingPending); }
+    if now < b.placed_ts + i64::from(h.params.bet_timeout_s) { return Err(BetError::TooEarly); }
+    p.pending = PendingBet { active: 0, ..bytemuck::Zeroable::zeroed() };
+    h.reserved = h.reserved.saturating_sub(b.hold);
+    h.vault = h.vault.checked_sub(b.wager).ok_or(BetError::Overflow)?;
+    h.chips_outstanding += b.wager;
+    p.chips += b.wager;
+    match b.game {
+        WHEEL => p.luck_milli = METER_MAX,
+        HARMONY => {
+            p.luck_milli = (p.luck_milli + h.params.harmony_cost_milli).min(METER_MAX);
+            p.faith_milli = (p.faith_milli + h.params.harmony_cost_milli).min(METER_MAX);
+            p.harmony_at = 0;
+        }
+        _ => {}
+    }
+    p.timeouts = p.timeouts.saturating_add(1);
+    Ok((b.seq, b.wager))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::money::liabilities;
+    use crate::state::Params;
+    fn rig(vault_chips: u64, chips: u64) -> (Player, House) {
+        let mut p: Player = bytemuck::Zeroable::zeroed();
+        let mut h: House = bytemuck::Zeroable::zeroed();
+        h.params = Params::launch();
+        h.vault = vault_chips * CHIP;
+        h.treasury = 250 * CHIP;
+        h.jackpot = 200 * CHIP;
+        p.chips = chips * CHIP;
+        h.chips_outstanding = chips * CHIP;
+        h.total_credited = h.vault + h.treasury + h.jackpot + p.chips;
+        (p, h)
+    }
+    fn balanced(h: &House) { assert_eq!(liabilities(h), u128::from(h.total_credited - h.total_withdrawn)); }
+    fn heads() -> [u8; 32] { [0; 32] }
+    fn tails() -> [u8; 32] { [0xff; 32] }
+
+    #[test]
+    fn a_win_a_loss_and_the_shares() {
+        let (mut p, mut h) = rig(5_000, 30);
+        let s = place(&mut p, &mut h, COIN, 10, 0, [1; 32], 100).unwrap();
+        assert_eq!((p.chips, h.reserved), (20 * CHIP, 19 * CHIP));
+        let r = settle(&mut p, &mut h, &heads(), s, 101).unwrap();
+        assert_eq!((r.payout, p.chips, h.reserved, p.flips, p.wagered), (19 * CHIP, 39 * CHIP, 0, 1, 10 * CHIP));
+        assert_eq!((h.treasury, h.jackpot), (250 * CHIP + 50_000, 200 * CHIP + 25_000));
+        assert_eq!(p.luck_milli, 800);
+        balanced(&h);
+        let s = place(&mut p, &mut h, COIN, 10, 0, [1; 32], 102).unwrap();
+        assert_eq!(settle(&mut p, &mut h, &tails(), s, 103).unwrap().payout, 0);
+        assert_eq!(p.chips, 29 * CHIP);
+        balanced(&h);
+    }
+
+    #[test]
+    fn late_repeated_and_foreign_answers_change_nothing() {
+        let (mut p, mut h) = rig(5_000, 30);
+        let s = place(&mut p, &mut h, COIN, 10, 0, [1; 32], 0).unwrap();
+        assert!(settle(&mut p, &mut h, &heads(), s + 1, 1).is_none());
+        assert!(settle(&mut p, &mut h, &heads(), s, 1).is_some());
+        let (a, b) = (p.chips, h.vault);
+        assert!(settle(&mut p, &mut h, &heads(), s, 2).is_none());
+        assert_eq!((p.chips, h.vault), (a, b));
+        // refunded, then the answer turns up
+        let s = place(&mut p, &mut h, COIN, 10, 0, [1; 32], 10).unwrap();
+        assert_eq!(refund(&mut p, &mut h, 100), Err(BetError::TooEarly));
+        refund(&mut p, &mut h, 190).unwrap();
+        let a = p.chips;
+        assert!(settle(&mut p, &mut h, &heads(), s, 191).is_none());
+        assert_eq!(refund(&mut p, &mut h, 999), Err(BetError::NothingPending));
+        assert_eq!((p.chips, h.reserved), (a, 0));
+        balanced(&h);
+    }
+
+    #[test]
+    fn what_a_table_refuses() {
+        let (mut p, mut h) = rig(5_000, 30);
+        for (g, c, k, e) in [(COIN, 10, 2, BetError::BadPick), (BLACKJACK, 10, 0, BetError::BadPick), (MARKET, 10, 0, BetError::BadPick), (COIN, 11, 0, BetError::BadWager), (COIN, 0, 0, BetError::BadWager), (WHEEL, 0, 0, BetError::LuckLow), (WHEEL, 10, 0, BetError::BadWager), (HARMONY, 0, 0, BetError::LuckLow)] {
+            assert_eq!(place(&mut p, &mut h, g, c, k, [0; 32], 0), Err(e), "{g} {c} {k}");
+        }
+        assert_eq!(place(&mut p, &mut h, COIN, u64::MAX, 0, [0; 32], 0), Err(BetError::Overflow));
+        place(&mut p, &mut h, COIN, 10, 0, [0; 32], 0).unwrap();
+        assert_eq!(place(&mut p, &mut h, COIN, 10, 0, [0; 32], 0), Err(BetError::Busy));
+        let (mut p, mut h) = rig(5_000, 9);
+        assert_eq!(place(&mut p, &mut h, COIN, 10, 0, [0; 32], 0), Err(BetError::NoChips));
+        let (mut p, mut h) = rig(1_999, 30);
+        assert_eq!(place(&mut p, &mut h, COIN, 10, 0, [0; 32], 0), Err(BetError::MaxBet));
+        let (mut p, mut h) = rig(5_000, 30);
+        h.reserved = h.vault - 2_000 * CHIP; // the table is open, but a slots jackpot is 1,000 chips on top of everything held
+        place(&mut p, &mut h, SLOTS, 10, 0, [0; 32], 0).unwrap();
+        let (mut p2, _) = rig(0, 30);
+        h.chips_outstanding += p2.chips;
+        assert_eq!(place(&mut p2, &mut h, SLOTS, 10, 0, [0; 32], 0), Err(BetError::MaxBet));
+    }
+
+    #[test]
+    fn wheels_spend_meters_and_give_them_back_on_a_refund() {
+        let (mut p, mut h) = rig(5_000, 30);
+        p.luck_milli = METER_MAX;
+        let s = place(&mut p, &mut h, WHEEL, 0, 0, [0; 32], 0).unwrap();
+        assert_eq!((p.luck_milli, p.chips), (0, 30 * CHIP));
+        refund(&mut p, &mut h, 1_000).unwrap();
+        assert_eq!(p.luck_milli, METER_MAX);
+        assert!(settle(&mut p, &mut h, &heads(), s, 1_001).is_none());
+        let s = place(&mut p, &mut h, WHEEL, 0, 0, [0; 32], 1_002).unwrap();
+        assert_eq!(settle(&mut p, &mut h, &heads(), s, 1_003).unwrap().payout, 10 * CHIP);
+        p.luck_milli = 60_000;
+        p.faith_milli = 60_000;
+        let s = place(&mut p, &mut h, HARMONY, 0, 0, [0; 32], 2_000).unwrap();
+        assert_eq!((p.luck_milli, p.faith_milli), (40_000, 40_000));
+        assert!(settle(&mut p, &mut h, &tails(), s, 2_001).unwrap().jackpot);
+        assert_eq!(h.jackpot, 0);
+        p.luck_milli = 60_000;
+        p.faith_milli = 60_000;
+        assert_eq!(place(&mut p, &mut h, HARMONY, 0, 0, [0; 32], 2_100), Err(BetError::Cooldown));
+        balanced(&h);
+    }
+
+    #[test]
+    fn blessings_come_from_the_treasury_within_the_cap() {
+        let (mut p, mut h) = rig(5_000, 400);
+        p.faith_milli = METER_MAX; // saint: +3%
+        h.params.allowed_wagers[0] = 10;
+        let before = h.treasury;
+        let t0 = 10 * DAY_S;
+        let s = place(&mut p, &mut h, ROULETTE, 10, 0, [0; 32], t0).unwrap(); // straight-up on 0
+        let r = settle(&mut p, &mut h, &heads(), s, t0 + 1).unwrap(); // lands on 0: 360 chips, +10 blessing
+        assert_eq!((r.payout, r.blessing), (370 * CHIP, 10 * CHIP));
+        assert_eq!(h.treasury, before + 50_000 - 10 * CHIP);
+        // the day's cap is 5% of 250 chips: 12 in all, so 2 are left
+        let s = place(&mut p, &mut h, ROULETTE, 10, 0, [0; 32], t0 + 2).unwrap();
+        assert_eq!(settle(&mut p, &mut h, &heads(), s, t0 + 3).unwrap().blessing, 2 * CHIP);
+        let s = place(&mut p, &mut h, ROULETTE, 10, 0, [0; 32], t0 + DAY_S + 2).unwrap();
+        assert!(settle(&mut p, &mut h, &heads(), s, t0 + DAY_S + 3).unwrap().blessing > 2 * CHIP);
+        balanced(&h);
+    }
+
+    #[test]
+    fn random_play_balances_and_the_vault_can_always_pay() {
+        for seed in 1..=300u64 {
+            let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let mut next = || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+            let (mut p, mut h) = rig(4_000, 300);
+            let mut now = 0i64;
+            for _ in 0..200 {
+                now += (next() % 90) as i64;
+                let g = (next() % 6) as u8;
+                if is_meter_game(g) { p.luck_milli = METER_MAX; p.faith_milli = METER_MAX; } else { p.faith_milli = (next() % 100_001) as u32; }
+                let pick = match g { COIN => (next() % 2) as u8, DICE => (next() % 4) as u8, ROULETTE => [0u8, 17, 36, 100, 103, 111, 122][(next() % 7) as usize], _ => 0 };
+                if let Ok(s) = place(&mut p, &mut h, g, if is_meter_game(g) { 0 } else { 10 }, pick, [0; 32], now) {
+                    assert!(h.reserved <= h.vault, "seed {seed}: holds above the vault");
+                    balanced(&h);
+                    if next() % 12 == 0 { now += 200; refund(&mut p, &mut h, now).unwrap(); }
+                    else { let mut rnd = [0u8; 32]; for c in rnd.chunks_mut(8) { c.copy_from_slice(&next().to_le_bytes()); } let r = settle(&mut p, &mut h, &rnd, s, now + 1).unwrap(); assert!(r.jackpot || r.payout - r.blessing <= max_payout(g, r.wager)); assert_eq!(p.chips % CHIP, 0, "whole chips"); }
+                }
+                balanced(&h);
+                assert_eq!(p.chips, h.chips_outstanding);
+                assert!(!p.busy() && h.reserved == 0);
+            }
+        }
+    }
+}

@@ -2,7 +2,7 @@ import './games.css';
 import { store, clearProfile } from '../core/state';
 import { bus, type PanelKind } from '../core/bus';
 import { audio } from '../core/audio';
-import {
+import { type BetProof,
   backend, BackendError, type BjState, type AgentDecision, type AgentId, type AgentProof, type CampaignRow, type RealmEvent,
   type MarketState, type MarketSide, type MarketResult, type MarketCrowdBet,
 } from '../core/backend';
@@ -28,10 +28,9 @@ const $$ = (r: ParentNode, s: string) => Array.from(r.querySelectorAll<HTMLEleme
 const fmt = (n: number) => Math.round(n).toLocaleString();
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const rndOf = <T,>(a: readonly T[]) => a[Math.floor(Math.random() * a.length)];
-const EXPLORER = 'https://testnet.nearblocks.io';
-/** a short, tappable link to a transaction on the NEAR testnet explorer */
+/** a short, tappable link to a transaction on Solana Explorer */
 const txLink = (hash?: string | null, label?: string) => hash
-  ? `<a class="txl" href="${EXPLORER}/txns/${hash}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${label ?? `${hash.slice(0, 5)}&hellip;${hash.slice(-4)}`} &#8599;</a>` : '';
+  ? `<a class="txl" href="${backend.txUrl?.(hash) ?? '#'}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${label ?? `${hash.slice(0, 4)}&hellip;${hash.slice(-3)}`} &#8599;</a>` : '';
 const mod360 = (x: number) => ((x % 360) + 360) % 360;
 /** the button turns into a spinner (same size) while the chain works; nothing else on the panel can double-fire it */
 async function pending<T>(btn: Element | null, fn: () => Promise<T>): Promise<T> {
@@ -169,13 +168,29 @@ function canCover(root: Root, chips: number, what: 'bet' | 'tithe' = 'bet'): boo
   return false;
 }
 /** standard verdict from a bet result */
-function verdict(root: Root, wager: number, payout: number, blessing: number, what: string, tx?: string) {
-  const link = tx ? `<br>${txLink(tx, 'VIEW ON EXPLORER')}` : '';
+function verdict(root: Root, wager: number, payout: number, blessing: number, what: string, proof?: BetProof) {
+  const link = proof ? `<br>${txLink(proof.placeTx, 'VIEW ON EXPLORER')}${backend.verifyBet ? '<a class="txl vfy" data-verify role="button" tabindex="0">VERIFY THIS BET</a>' : ''}` : '';
   const sub = [what, blessing ? `Blessing +${blessing}` : ''].filter(Boolean).join(' · ') + link;
   if (payout <= 0) showResult(root, 'lose', 'YOU LOSE', wager, (what || 'Better luck next time') + link);
   else if (payout >= wager * 15) showResult(root, 'jackpot', 'JACKPOT!', payout, sub);
   else if (payout <= wager * 1.05) showResult(root, 'push', 'BET RETURNED', `+${fmt(payout)}`, sub);
   else showResult(root, 'win', 'YOU WIN!', payout, sub);
+  if (proof) root.querySelector<HTMLElement>('[data-verify]')?.addEventListener('click', (ev) => { ev.stopPropagation(); hideResult(root); void verifyBetView(root, proof); });
+}
+/** checks one bet from the chain, in the browser, and says what it found */
+async function verifyBetView(root: Root, proof: BetProof) {
+  const gm = root.querySelector('.gm'); if (!gm || gm.querySelector('.fw')) return;
+  const el = document.createElement('div'); el.className = 'fw vb'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Verify this bet');
+  el.innerHTML = `<div class="fw-card"><h3>VERIFY BET #${proof.seq}</h3><p>Nobody at the house can see or choose this number. MagicBlock's oracle makes it and proves it on chain, and only that proof can settle your bet.</p><div class="vb-rows" id="vb" role="status">Reading the rollup...</div><div class="fw-row"><span id="vb-tx"></span><button class="g-key dark" data-f="done">DONE</button></div></div>`;
+  gm.appendChild(el); el.addEventListener('click', (ev) => { ev.stopPropagation(); if (ev.target === el || (ev.target as HTMLElement).dataset.f === 'done') el.remove(); });
+  const row = (ok: boolean | null, a: string, b: string) => `<div class="vb-row ${ok === null ? '' : ok ? 'ok' : 'bad'}"><i>${ok === null ? '&middot;' : ok ? '&#10003;' : '&#10007;'}</i><span>${a}</span><b>${b}</b></div>`;
+  try {
+    const c = await backend.verifyBet!(proof); if (!el.isConnected) return;
+    const out = el.querySelector('#vb')!;
+    if (!c.found) { out.innerHTML = row(null, 'The rollup has not listed this bet yet.', 'Try again in a moment'); return; }
+    out.innerHTML = row(c.fromVrf, 'Settled by the VRF program', c.fromVrf ? 'YES' : 'NO') + row(null, 'Random number', `${c.randomness.slice(0, 10)}&hellip;${c.randomness.slice(-8)}`) + row(null, 'Worked out here', c.recomputed) + row(c.matches, 'Recorded on chain', c.recorded) + row(c.fromVrf && c.matches, c.fromVrf && c.matches ? 'This bet was fair' : 'This does not add up', '');
+    if (c.tx) el.querySelector('#vb-tx')!.innerHTML = txLink(c.tx, 'THE PROOF TRANSACTION');
+  } catch (e) { const out = el.querySelector('#vb'); if (out) out.textContent = errText(e); }
 }
 
 // ---------------------------------------------------------------------------------------------- SLOTS
@@ -227,7 +242,7 @@ function slots(root: Root, close: () => void) {
       await sleep(700); setBal(root); $(root, '#jp').textContent = fmt(store.stats.jackpot);
       $(root, '#lw').textContent = fmt(res.payout);
       if (res.payout > 0) { line.classList.add('on'); strips.forEach(st => st.children[1]?.classList.add('hit')); }
-      verdict(root, bet, res.payout, res.blessing, res.payout > 0 ? '' : `LUCK +${res.luckGain.toFixed(1)}`, res.proof?.txHash);
+      verdict(root, bet, res.payout, res.blessing, res.payout > 0 ? '' : `LUCK +${res.luckGain.toFixed(1)}`, res.proof);
     } catch (e) { [0, 1, 2].forEach(i => land(i, cur[i])); oops(root, e); }
     finally { snd(); busy = false; go.disabled = false; }
   };
@@ -270,7 +285,7 @@ function coinflip(root: Root, close: () => void) {
       const res = await backend.placeBet({ game: 'coinflip', wager: bet, pick: call });
       await sp.land([res.outcome.side === 'H' ? 0 : 180], 1300); angle = sp.angles[0]; audio.play('hit', 0.4);
       coinHist.unshift(res.outcome.side!); hist(); setBal(root);
-      verdict(root, bet, res.payout, res.blessing, res.outcome.side === 'H' ? 'Crown. Heads.' : 'Cross. Tails.', res.proof?.txHash);
+      verdict(root, bet, res.payout, res.blessing, res.outcome.side === 'H' ? 'Crown. Heads.' : 'Cross. Tails.', res.proof);
     } catch (e) { await sp.land([mod360(angle)], 700); angle = sp.angles[0]; oops(root, e); }
     finally { busy = false; go.disabled = false; }
   });
@@ -313,7 +328,7 @@ function dice(root: Root, close: () => void) {
       const [a, b] = res.outcome.dice!;
       await sp.land([SHOW[a][0], SHOW[a][1], SHOW[b][0], SHOW[b][1]], 1300); ang = sp.angles.slice(); audio.play('hit', 0.45);
       $(root, '#sum').textContent = `${a} + ${b} = ${a + b}`; setBal(root);
-      verdict(root, bet, res.payout, res.blessing, `Rolled ${a + b}`, res.proof?.txHash);
+      verdict(root, bet, res.payout, res.blessing, `Rolled ${a + b}`, res.proof);
     } catch (e) { await sp.land([SHOW[3][0], SHOW[3][1], SHOW[4][0], SHOW[4][1]], 700); ang = sp.angles.slice(); $(root, '#sum').textContent = ''; oops(root, e); }
     finally { busy = false; go.disabled = false; }
   });
@@ -380,7 +395,7 @@ function roulette(root: Root, close: () => void) {
       await sp.land([mod360(-i * th), 0], LAND); [W, B] = sp.angles;
       rlHist.unshift(n); hist(); setBal(root);
       root.querySelector(`.rc[data-p="${n}"]`)?.classList.add('won');
-      verdict(root, bet, res.payout, res.blessing, `${n} ${colorOf(n).toUpperCase()}`, res.proof?.txHash);
+      verdict(root, bet, res.payout, res.blessing, `${n} ${colorOf(n).toUpperCase()}`, res.proof);
     } catch (e) { snd(0.8); await sp.land([mod360(W), 0], 900); [W, B] = sp.angles; oops(root, e); }
     finally { snd(); busy = false; go.disabled = false; }
   });

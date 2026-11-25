@@ -1,9 +1,9 @@
 import cors from '@fastify/cors'; import Fastify from 'fastify'; import type { FastifyRequest } from 'fastify';
 import { addr, b58decode, b64decode, b64encode, CHIP, decodeHouse, ix, REALM, type Rpc } from '@cnc/realm';
 import { cleanName, nameKey, nameProblem } from '@cnc/shared';
-import { verifyPrivy } from './privy.ts'; import { FAUCET_FLOOR, SETUP_FLOOR, type Config } from './config.ts'; import { HttpError, type Sponsor } from './sponsor.ts'; import type { Keeper } from './keeper.ts'; import type { SolStore } from './store.ts';
+import { verifyPrivy } from './privy.ts'; import { FAUCET_FLOOR, SETUP_FLOOR, type Config } from './config.ts'; import { HttpError, type Sponsor } from './sponsor.ts'; import type { Keeper } from './keeper.ts'; import type { Indexer } from './indexer.ts'; import type { SolStore } from './store.ts';
 
-export interface Deps { config: Config; store: SolStore; l1: Rpc; er: Rpc; sponsor: Sponsor | null; keeper: Keeper | null }
+export interface Deps { config: Config; store: SolStore; l1: Rpc; er: Rpc; sponsor: Sponsor | null; keeper: Keeper | null; indexer?: Indexer | null }
 const DAY = 86_400_000;
 const wallet = (v: unknown) => { const s = String(v ?? ''); try { if (b58decode(s).length === 32) return s; } catch { /* */ } throw new HttpError(400, 'bad_args', 'That is not a Solana address.'); };
 export function buildApp(d: Deps) {
@@ -20,7 +20,7 @@ export function buildApp(d: Deps) {
     if (health && Date.now() - health.at < 5_000) return health.body;
     const safe = async <T>(f: () => Promise<T>) => { try { return await f(); } catch { return null; } };
     const [l1Slot, erSlot, bal, house] = await Promise.all([safe(() => d.l1.slot()), safe(() => d.er.slot()), safe(() => d.l1.balance(d.config.sponsor?.address ?? '')), safe(async () => decodeHouse((await d.er.account(addr.house()))!.data))]);
-    const body = { ok: l1Slot !== null && erSlot !== null && !!house && !house.paused, program: REALM, l1: { up: l1Slot !== null, slot: l1Slot }, rollup: { up: erSlot !== null, slot: erSlot, url: d.config.er }, paused: house?.paused ?? null, sponsor: { address: d.config.sponsor?.address ?? null, sol: bal === null ? null : Number(bal) / 1e9, faucet: bal !== null && bal > FAUCET_FLOOR, accounts: bal !== null && bal > SETUP_FLOOR }, keeper: d.keeper?.status ?? null, books: d.keeper?.books ?? null, vault_chips: house ? Number(house.vault / CHIP) : null, players: await d.store.count() };
+    const body = { ok: l1Slot !== null && erSlot !== null && !!house && !house.paused, program: REALM, l1: { up: l1Slot !== null, slot: l1Slot }, rollup: { up: erSlot !== null, slot: erSlot, url: d.config.er }, paused: house?.paused ?? null, sponsor: { address: d.config.sponsor?.address ?? null, sol: bal === null ? null : Number(bal) / 1e9, faucet: bal !== null && bal > FAUCET_FLOOR, accounts: bal !== null && bal > SETUP_FLOOR }, keeper: d.keeper?.status ?? null, books: d.keeper?.books ?? null, indexer: d.indexer?.status ?? null, vault_chips: house ? Number(house.vault / CHIP) : null, players: await d.store.count() };
     health = { at: Date.now(), body }; return body;
   });
   app.get('/me', async (q) => { const r = await d.store.byDid(did(q)); return r ? { wallet: r.wallet, name: r.name, avatar: r.avatar } : { wallet: null, name: null, avatar: null }; });
@@ -59,6 +59,9 @@ export function buildApp(d: Deps) {
     return { signature: await sponsor().send([ix.transfer(sponsor().key.address, row.wallet, d.config.faucetLamports)]), sol: Number(d.config.faucetLamports) / 1e9 };
   });
 
+  app.get('/bets', async (q) => ({ bets: await d.store.bets(wallet((q.query as any).wallet), 50) }));
+  let board: { at: number; rows: unknown[] } | null = null;
+  app.get('/leaderboard', async () => { if (board && Date.now() - board.at < 10_000) return { rows: board.rows }; const rows = []; for (const [w, n] of await d.store.nets()) { const r = await d.store.byWallet(w); if (r?.name) rows.push({ wallet: w, name: r.name, wagered: Math.round(n.wagered), net: Math.round(n.net) }); } rows.sort((a, b) => b.wagered - a.wagered); board = { at: Date.now(), rows: rows.slice(0, 20).map((r, i) => ({ rank: i + 1, ...r })) }; return { rows: board.rows }; });
   app.get('/names/check', async (q) => { const n = cleanName(String((q.query as any).name ?? '')), problem = nameProblem(n); if (problem) return { available: false, reason: problem }; const o = await d.store.byNameKey(nameKey(n)); return o && o.wallet !== (q.query as any).wallet ? { available: false, reason: 'That name is taken' } : { available: true }; });
   app.post('/names', async (q) => {
     const row = await d.store.byDid(did(q)); if (!row) throw new HttpError(403, 'no_account', 'Finish signing in first.');

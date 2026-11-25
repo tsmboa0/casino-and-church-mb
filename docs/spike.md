@@ -48,6 +48,13 @@ At about 11:38 to 11:46 (WAT) EU refused every connection, and the devnet router
   helped: our accounts are delegated to EU.
 - `spike/tests/uptime.mjs` is recording all four regions (`spike/results/uptime.jsonl`) so the region choice rests on data.
 
+## EU freezes (25 Nov, later)
+
+Besides the upgrade, EU froze four times in one day for 40 to 80 s (about 10:50, 11:01 WAT, 14:41, 14:54): slots stop,
+the RPC still answers. Bets placed just before a freeze settled by themselves after it; nothing was lost. Asia, US and TEE
+only had their one-minute upgrades in the same watch, but that is 1.4 hours of data (the recorder's own machine was offline
+for the rest). Keep recording before choosing the launch region. The region is one setting on each side.
+
 ## Decision
 
 Go ahead on EU with the plan as written. Nothing needed a fallback. Test 8's limit should read "no gap over 5 s while the

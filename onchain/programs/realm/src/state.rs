@@ -310,7 +310,10 @@ pub struct Player {
     pub hand: Hand,
     pub btc: [BtcSlot; 8],
     pub recent: [BetResult; 8],
-    pub spare: [u8; 120],
+    /// the randomness that settled the last bet, so anybody can check it
+    pub last_vrf: [u8; 32],
+    pub last_vrf_seq: u64,
+    pub spare: [u8; 80],
 }
 
 impl Player {

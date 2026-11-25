@@ -1,0 +1,18 @@
+{
+ "at": "2026-11-25T13:57:42.829Z",
+ "rule": "fixed before the run: |z| > 2.6 on these flips alone",
+ "flips": 1501,
+ "heads": 759,
+ "z": 0.44,
+ "wins": 754,
+ "runs": 764,
+ "expectedRuns": 751,
+ "p50": 681,
+ "p95": 903,
+ "max": 1455,
+ "errs": {
+  "timed out": 8,
+  "BetPending": 491
+ },
+ "verdict": "consistent with a fair coin"
+}
