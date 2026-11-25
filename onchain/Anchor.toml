@@ -1,0 +1,10 @@
+[toolchain]
+anchor_version = "1.0.2"
+[features]
+resolution = true
+skip-lint = false
+[programs.devnet]
+realm = "6uoz1h2ZWQMgniDx2vKEvh6bHtgCoFoGegfVtNW1q6cX"
+[provider]
+cluster = "devnet"
+wallet = "~/.config/casino-mb/devnet/admin.json"

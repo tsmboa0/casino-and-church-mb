@@ -1,0 +1,10 @@
+{
+  "name": "@cnc/realm",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "tsx --test test/*.test.ts", "idl": "node scripts/idl.mjs" },
+  "dependencies": { "@noble/curves": "^1.9.7", "@noble/hashes": "^1.7.1" },
+  "devDependencies": { "tsx": "^4.20.3", "typescript": "^5.9.3", "@types/node": "^24.3.0" }
+}

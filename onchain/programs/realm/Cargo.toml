@@ -1,0 +1,27 @@
+[package]
+name = "realm"
+version = "0.1.0"
+edition = "2021"
+description = "The Casino & The Church on Solana: chips, games and church, on a MagicBlock Ephemeral Rollup"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[features]
+default = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build"]
+
+# every anchor-* crate is held at 1.0.2 by Cargo.lock: Cargo would pick 1.2.2 helpers, which do not compile with 1.0.2
+[dependencies]
+anchor-lang = { version = "=1.0.2", features = ["init-if-needed"] }
+bytemuck = { version = "1", features = ["derive", "min_const_generics"] }
+ephemeral-rollups-sdk = { version = "=0.18.0", features = ["anchor", "vrf", "crank"] }
+session-keys = { version = "=3.1.1", features = ["no-entrypoint"] }
+solana-instructions-sysvar = "=3.0.1"

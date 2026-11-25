@@ -1,0 +1,162 @@
+{
+ "at": "2026-11-25T11:03:06.535Z",
+ "checks": {
+  "setup in one transaction": {
+   "pass": true,
+   "info": {
+    "bytes": 744,
+    "ms": 1210,
+    "onRollupMs": 609,
+    "sponsorLamports": "12221760"
+   }
+  },
+  "welcome chips with the session key": {
+   "pass": true,
+   "info": ""
+  },
+  "welcome twice": {
+   "pass": true,
+   "info": "AlreadyClaimed"
+  },
+  "profile and realm": {
+   "pass": true,
+   "info": ""
+  },
+  "realm change too soon": {
+   "pass": true,
+   "info": "Cooldown"
+  },
+  "wallet holds no SOL": {
+   "pass": true,
+   "info": ""
+  },
+  "a wallet with 0 SOL cashes out": {
+   "pass": true,
+   "info": {
+    "ms": 1557
+   }
+  },
+  "buy 50 chips, credited": {
+   "pass": true,
+   "info": {
+    "ms": 1064
+   }
+  },
+  "syncing again credits nothing": {
+   "pass": true,
+   "info": ""
+  },
+  "any action credits a deposit (no sync sent)": {
+   "pass": true,
+   "info": ""
+  },
+  "cash out 30, and settling again pays nothing": {
+   "pass": true,
+   "info": ""
+  },
+  "session key cashes out": {
+   "pass": true,
+   "info": "custom_2006"
+  },
+  "too many chips": {
+   "pass": true,
+   "info": "NoChips"
+  },
+  "zero chips": {
+   "pass": true,
+   "info": "BadAmount"
+  },
+  "stranger plays as someone else": {
+   "pass": true,
+   "info": "custom_3012"
+  },
+  "stranger uses another player's session": {
+   "pass": true,
+   "info": "BadSession"
+  },
+  "own session on another's player": {
+   "pass": true,
+   "info": "BadSession"
+  },
+  "syncing with someone else's purse": {
+   "pass": true,
+   "info": "custom_2006"
+  },
+  "payout to another wallet": {
+   "pass": true,
+   "info": "custom_2006"
+  },
+  "payout from another player's account": {
+   "pass": true,
+   "info": "custom_2006"
+  },
+  "opening the same account twice": {
+   "pass": true,
+   "info": "custom_0"
+  },
+  "delegating a delegated player": {
+   "pass": true,
+   "info": "BadPlayer"
+  },
+  "buying a fraction of a chip": {
+   "pass": true,
+   "info": "BadAmount"
+  },
+  "buying under the minimum": {
+   "pass": true,
+   "info": "BadAmount"
+  },
+  "stranger sets config": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "stranger pauses the game": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "initialising again": {
+   "pass": true,
+   "info": "custom_0"
+  },
+  "cash_out_l1 while on the rollup": {
+   "pass": true,
+   "info": "custom_3007"
+  },
+  "playing while paused": {
+   "pass": true,
+   "info": "Paused"
+  },
+  "the 8th cash-out leaves the rollup, all 8 paid": {
+   "pass": true,
+   "info": ""
+  },
+  "cash out on L1 while off the rollup": {
+   "pass": true,
+   "info": ""
+  },
+  "back on the rollup, commits reset, L1 cash-out booked": {
+   "pass": true,
+   "info": ""
+  },
+  "I1 rollup books balance": {
+   "pass": true,
+   "info": {
+    "owed": "5510000000",
+    "credited": "5560000000",
+    "withdrawn": "50000000"
+   }
+  },
+  "I2 bank holds what it should": {
+   "pass": true,
+   "info": {
+    "bank": 5510858520,
+    "deposited": "5560000000",
+    "paid": "50000000"
+   }
+  },
+  "I3 nothing credited or paid ahead": {
+   "pass": true,
+   "info": ""
+  }
+ }
+}
