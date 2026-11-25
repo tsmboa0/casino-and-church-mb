@@ -38,7 +38,7 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
   const root = document.getElementById('onboarding')!;
   root.className = 'show';
   /** Privy login (email, then a Solana wallet). The offline demo (?demo=1) has none. */
-  const privy = walletEnabled;
+  const privy = walletEnabled && backend.mode === 'chain' && !!backend.attach;
   let me: string | null = null;                    // the signed-in wallet
   /** live game (a chain backend) = real accounts; the offline demo has none */
   const accounts = !privy && !!backend.signIn;
@@ -129,7 +129,7 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
     root.querySelector('#play')?.addEventListener('click', () => (privy ? void signInWithPrivy() : nameStep()));
     root.querySelector('#out')?.addEventListener('click', () => void signOutOfPrivy());
     root.querySelector('#new')?.addEventListener('click', () => { clearProfile(); store.profile = null; nameStep(); });
-    root.querySelector('#cont')?.addEventListener('click', () => finish(p!));
+    root.querySelector('#cont')?.addEventListener('click', () => { if (!privy) return finish(p!); void afterSignIn().catch((e) => { title(); say(e instanceof Error ? e.message : 'Could not continue. Try again.', true); }); });
     root.querySelector('#signin')?.addEventListener('click', signInStep);
     root.querySelector('#create')?.addEventListener('click', () => { draft.securing = false; nameStep(); });
     root.querySelector('#secure')?.addEventListener('click', () => { draft.securing = true; draft.name = p?.username ?? ''; nameStep(); });
@@ -166,17 +166,43 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
       const a = await w.login();
       if (!a) return;
       me = a;
-      const p = mine();
-      if (p) finish(p); else nameStep();
+      await afterSignIn();
     } catch (e) {
       b.disabled = false; b.querySelector('span')!.textContent = 'PLAY';
       say(e instanceof Error ? e.message : 'Could not open sign-in. Try again.', true);
     }
   };
+  /** signed in: somebody who has played before goes straight in (one popup if this device has no live session) */
+  const afterSignIn = async () => {
+    const b = root.querySelector<HTMLButtonElement>('#play, #cont'); if (b) { b.disabled = true; b.querySelector('span')!.textContent = 'ONE MOMENT'; }
+    const st = await backend.attach!(me!);
+    const p = mine();
+    if (st.name) { draft.name = st.name; draft.avatar = AVATARS.some((a) => a.id === st.avatar) ? st.avatar! : p?.avatar ?? draft.avatar; return st.ready ? finish(known()) : openStep(() => finish(known())); }
+    nameStep();
+  };
+  const known = (): Profile => ({ username: draft.name, avatar: draft.avatar, startRealm: 'plaza' as any, toursDone: opts.agent ? { casino: true, church: true } : backend.toursDone?.() ?? mine()?.toursDone ?? { casino: false, church: false } });
+  /** the one popup: opens the account on Solana and lets this device play */
+  const openStep = (done: () => void) => {
+    root.innerHTML = `
+    <div class="ob card px openacct">
+      <h2>One approval and you are in</h2>
+      <p class="sub">This opens your account on Solana and lets this device play for a week. It costs you nothing.</p>
+      <div class="oa-state" id="oa" role="status"></div>
+      <small class="hint" id="oa-hint">After this, bets need no approval. Only buying chips and cashing out do.</small>
+      <div class="row"><button class="btn ghost" id="back">BACK</button><button class="btn big" id="go">APPROVE</button></div>
+    </div>`;
+    const go = root.querySelector('#go') as HTMLButtonElement, back = root.querySelector('#back') as HTMLButtonElement, oa = root.querySelector('#oa') as HTMLElement, hint = root.querySelector('#oa-hint') as HTMLElement;
+    const run = async () => {
+      go.disabled = true; back.disabled = true; hint.className = 'hint';
+      try { await backend.setup!((t) => { oa.textContent = t; }); if (draft.name) await backend.saveName!(draft.name, draft.avatar); oa.textContent = 'Welcome.'; done(); }
+      catch (e) { oa.textContent = ''; hint.textContent = e instanceof Error ? e.message : 'That did not work. Try again.'; hint.className = 'hint bad'; go.disabled = false; back.disabled = false; go.textContent = 'TRY AGAIN'; }
+    };
+    go.addEventListener('click', () => void run()); back.addEventListener('click', title);
+  };
   const signOutOfPrivy = async () => {
     const b = root.querySelector<HTMLButtonElement>('#out'); if (!b || b.disabled) return;
     b.disabled = true;
-    try { await (await loadWallet()).logout(); me = null; draft.name = ''; title(); } catch { b.disabled = false; say('Could not sign out. Try again.', true); }
+    try { backend.signOut?.(); await (await loadWallet()).logout(); me = null; draft.name = ''; title(); } catch { b.disabled = false; say('Could not sign out. Try again.', true); }
   };
 
   // ---------------------------------------------------------------- sign in (any device)
@@ -321,7 +347,7 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
     upd();
     root.querySelector('#back')?.addEventListener('click', nameStep);
     root.querySelector('#lore')!.addEventListener('click', () => storyStep());   // the book again; START comes back here
-    root.querySelector('#next')!.addEventListener('click', () => (opts.agent
+    root.querySelector('#next')!.addEventListener('click', () => (privy && opts.agent ? openStep(() => finish(known())) : opts.agent
       ? finish({ username: draft.name, avatar: draft.avatar, startRealm: 'plaza' as any, toursDone: { casino: true, church: true } })
       : howStep()));
   };
@@ -337,7 +363,7 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
     </div>`;
     playHowTo(root);
     root.querySelector('#back')!.addEventListener('click', avatarStep);
-    root.querySelector('#go')!.addEventListener('click', () => finish({ username: draft.name, avatar: draft.avatar, startRealm: 'plaza' as any, toursDone: draft.signedIn?.toursDone ?? { casino: false, church: false } }));
+    root.querySelector('#go')!.addEventListener('click', () => privy ? openStep(() => finish(known())) : finish({ username: draft.name, avatar: draft.avatar, startRealm: 'plaza' as any, toursDone: draft.signedIn?.toursDone ?? { casino: false, church: false } }));
   };
 
   title();

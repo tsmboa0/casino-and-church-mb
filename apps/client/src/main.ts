@@ -192,7 +192,7 @@ async function boot() {
     version: 1,
     state: () => ({
       mode: backend.mode, signedIn: !!store.profile, profile: store.profile, realm: store.realm,
-      chips: store.eco.chips, luck: Math.round(store.eco.luck * 10) / 10, faith: Math.round(store.eco.faith * 10) / 10, testNear: store.eco.near,
+      chips: store.eco.chips, luck: Math.round(store.eco.luck * 10) / 10, faith: Math.round(store.eco.faith * 10) / 10, testSol: store.eco.sol,
       panelOpen: document.getElementById('modal')?.classList.contains('open') ?? false,
       panelTitle: document.querySelector('#modal .gm-title span')?.textContent ?? null,
     }),

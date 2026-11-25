@@ -10,6 +10,9 @@ importers:
 
   apps/client:
     dependencies:
+      '@cnc/realm':
+        specifier: workspace:*
+        version: link:../../packages/realm
       '@cnc/shared':
         specifier: workspace:*
         version: link:../../packages/shared
@@ -65,6 +68,9 @@ importers:
 
   apps/server:
     dependencies:
+      '@cnc/realm':
+        specifier: workspace:*
+        version: link:../../packages/realm
       '@cnc/shared':
         specifier: workspace:*
         version: link:../../packages/shared

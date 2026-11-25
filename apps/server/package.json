@@ -4,8 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "tsx src/solana/index.ts",
+    "start": "tsx src/solana/index.ts",
     "test": "tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit -p ."
   },
@@ -15,7 +15,8 @@
     "fastify": "^5.3.3",
     "pg": "^8.16.0",
     "@noble/curves": "^1.9.7",
-    "@noble/hashes": "^1.7.1"
+    "@noble/hashes": "^1.7.1",
+    "@cnc/realm": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

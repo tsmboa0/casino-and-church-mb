@@ -26,6 +26,8 @@ export const walletEnabled = !!PRIVY_APP_ID && new URLSearchParams(location.sear
 let loading: Promise<WalletBridge> | null = null;
 /** loads Privy once (about 300 KB gzipped) and restores a previous session */
 export function loadWallet(): Promise<WalletBridge> {
+  // development builds only (removed from production): lets an automated test stand in for Privy
+  if (import.meta.env.DEV && (window as any).__testWallet) return Promise.resolve((window as any).__testWallet as WalletBridge);
   loading ??= import('./island').then((m) => m.mountWallet()).catch((e) => { loading = null; throw e; });
   return loading;
 }

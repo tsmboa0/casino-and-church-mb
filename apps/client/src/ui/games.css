@@ -726,3 +726,6 @@
 .pl-wrap { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; max-height: calc(var(--vvh, 100vh) - 110px); }
 .pl-group .pl-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .pl-group .g-key { flex: 0 1 auto; }
+
+.cs-row.three { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.cs-row.three .g-key { min-width: 0; padding-left: 4px; padding-right: 4px; }

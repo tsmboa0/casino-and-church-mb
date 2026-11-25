@@ -2,7 +2,7 @@ import { CAMPAIGN_LIMITS, campaignCost, campaignProblem, type NewCampaign } from
 import { store, type Plot, type HistRow } from './state';
 import { bus } from './bus';
 import {
-  PARAMS, CHIPS_PER_NEAR, QUESTS, PLOT_GATE, PLOT_MIN_BANKROLL, WHEEL_PRIZES, HARMONY_PRIZES, COIN_PAY_BPS,
+  PARAMS, CHIPS_PER_SOL, QUESTS, PLOT_GATE, PLOT_MIN_BANKROLL, WHEEL_PRIZES, HARMONY_PRIZES, COIN_PAY_BPS,
   randomDraws, resolveSlots, resolveCoin, resolveDice, resolveRoulette, pickWeighted, cardName, handTotal, tenOrAce, blackjackPayout,
   withBlessing, luckForBet, faithForTithe, blessingOf,
 } from './rules';
@@ -89,7 +89,7 @@ export interface Backend {
   offerLuck(luck: number): Promise<{ faithGain: number }>;
   lightCandle(): Promise<void>;
   claimQuest(id: string): Promise<void>;
-  deposit(near: number): Promise<void>;                          // chain: a direct signed tx WITH attached deposit
+  deposit(sol: number): Promise<void>;                           // chain: one popup, the SOL goes to the Bank on L1
   withdraw(chips: number): Promise<void>;
   faucet(): Promise<number | void>;                              // chain: server funds the account; resolves with the NEAR paid
   enterRealm(realm: 'casino' | 'church' | 'plaza'): Promise<void>;
@@ -128,6 +128,11 @@ export interface Backend {
   linkedAccount?(): string | null;
   /** a wallet already lives on this device (e.g. a guest from before accounts existed) */
   hasDeviceWallet?(): boolean;
+  /** OPTIONAL (Solana): after Privy signs in, what this wallet still needs; `setup` is one popup */
+  attach?(wallet: string): Promise<{ ready: boolean; isNew: boolean; name: string | null; avatar: string | null }>;
+  setup?(step?: (text: string) => void): Promise<void>;
+  saveName?(name: string, avatar: string): Promise<void>;
+  toursDone?(): { casino: boolean; church: boolean };
   /** OPTIONAL: re-read balances from the chain before acting on them */
   sync?(): Promise<void>;
   /** OPTIONAL: this device's guest wallet (chain mode) */
@@ -231,15 +236,15 @@ class MockBackend implements Backend {
     store.stats.claimed[id] = true;
     store.change({ chips: q.reward.chips ?? 0, luck: q.reward.luck ?? 0 }); if (q.reward.faith) this.faith(q.reward.faith);
   }
-  async deposit(near: number) {
-    if (near <= 0 || store.eco.near < near) fail('no_near', 'Not enough test NEAR. Use the faucet.');
-    store.change({ near: -near, chips: near * CHIPS_PER_NEAR });
+  async deposit(sol: number) {
+    if (sol <= 0 || store.eco.sol < sol) fail('no_sol', 'Not enough test SOL. Use the faucet.');
+    store.eco.sol = Math.max(0, store.eco.sol - sol); store.change({ chips: Math.round(sol * CHIPS_PER_SOL) });
   }
   async withdraw(chips: number) {
-    const n = Math.floor(Math.min(chips, store.eco.chips) / CHIPS_PER_NEAR); if (n < 1) fail('min', `You need at least ${CHIPS_PER_NEAR} chips to withdraw.`);
-    store.change({ chips: -n * CHIPS_PER_NEAR, near: n });
+    const n = Math.floor(Math.min(chips, store.eco.chips)); if (n < 1) fail('min', 'You have no chips to cash out.');
+    store.eco.sol += n / CHIPS_PER_SOL; store.change({ chips: -n });
   }
-  async faucet() { store.change({ near: 5 }); return 5; }
+  async faucet() { store.eco.sol += 0.05; store.change({}); return 0.05; }
   async enterRealm() { this.settle(); }
 
   async claimPlot(id: number, name: string, skin: string, bankroll: number): Promise<Plot> {
@@ -491,11 +496,11 @@ export let backend: Backend = new MockBackend();
 /** Boot hook. Chain mode falls back to the mock when `/healthz` does not answer. */
 export async function initBackend(): Promise<string | null> {
   const env = import.meta.env as unknown as Record<string, string | undefined>;
-  if ((env.VITE_BACKEND ?? 'mock') !== 'chain') return null;
+  if ((env.VITE_BACKEND ?? 'solana') === 'mock') return null;
   // ?demo=1: the offline demo on any build (no account, nothing on chain): the quickest way to try every panel
   if (new URLSearchParams(location.search).get('demo') === '1') return null;
-  const { connectChain } = await import('../chain/boot');
-  const next = await connectChain(env.VITE_API_URL ?? 'http://localhost:8787');
+  const { connectSolana } = await import('../solana/solanaBackend');
+  const next = await connectSolana(env.VITE_API_URL ?? 'http://localhost:8787');
   if ('offline' in next) return next.offline;
   if (backend instanceof MockBackend) backend.stop();
   backend = next;

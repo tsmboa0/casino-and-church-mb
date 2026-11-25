@@ -602,3 +602,7 @@ body:not(.playing) #labels { display: none; }
 .fine.bad { color: #ff8a8a; opacity: 1; }
 /* the page is not selectable (it is a game); sign-in fields must be, or Safari will not type in them */
 input, textarea, [id^="privy"] *, #headlessui-portal-root * { user-select: text; -webkit-user-select: text; }
+
+.openacct .oa-state { min-height: 22px; color: var(--gold, #f5c542); font-size: 13px; text-align: center; margin: 6px 0; }
+#rollup-banner { position: fixed; left: 50%; top: calc(8px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 400; display: flex; gap: 10px; align-items: baseline; max-width: 92vw; padding: 8px 14px; background: #14101cf0; border: 2px solid #f5c542; color: #f4ead5; font-size: 12px; pointer-events: none; }
+#rollup-banner b { color: #f5c542; white-space: nowrap; font-size: 11px; }

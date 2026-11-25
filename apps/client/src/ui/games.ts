@@ -11,7 +11,7 @@ import { verifyProof, SAMPLE_PROOF } from './aiverify';
 import { spriteCss, showBackstory } from './onboarding';
 import {
   SLOT_SYMS, SLOT_TRIPLE, COIN_PAY_BPS, DICE_OU_BPS, DICE_SEVEN_BPS, ROULETTE_PICK, RED, QUESTS, PARAMS,
-  CHIPS_PER_NEAR, PLOT_GATE, plotPlayableBankroll, MACHINE_SKINS, blessingOf,
+  CHIPS_PER_SOL, PLOT_GATE, plotPlayableBankroll, MACHINE_SKINS, blessingOf,
   TABLE, tableBet,
 } from '../core/rules';
 import { icon } from './icons';
@@ -553,17 +553,17 @@ async function copyText(t: string): Promise<boolean> {
   document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, t.length);
   let ok = false; try { ok = document.execCommand('copy'); } catch { /* */ } ta.remove(); return ok;
 }
-/** FUND WALLET: the player's own NEAR account, a COPY button, and a live check that shows the NEAR landing */
+/** FUND WALLET: the player's own Solana address, a COPY button, and a live check that shows the SOL landing */
 async function fundWallet(root: Root, refresh: () => void) {
   const gm = root.querySelector('.gm'); if (!gm || gm.querySelector('.fw')) return;
   const el = document.createElement('div'); el.className = 'fw'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Fund your wallet');
   el.innerHTML = `<div class="fw-card">
       <h3>FUND YOUR WALLET</h3>
-      <p>Send <b>testnet NEAR</b> to your game wallet from any NEAR testnet wallet. It shows up here in a few seconds; then tap <b>BUY CHIPS</b>.</p>
+      <p>Send <b>devnet SOL</b> to your game wallet from any Solana wallet. It shows up here in a few seconds; then tap <b>BUY CHIPS</b>.</p>
       <div class="fw-addr" id="fw-addr">Opening your wallet...</div>
       <div class="fw-row"><button class="g-key" data-f="copy">COPY ADDRESS</button><button class="g-key dark" data-f="done">DONE</button></div>
-      <div class="fw-st" id="fw-st" aria-live="polite">WALLET ${store.eco.near.toFixed(2)} NEAR &middot; watching for deposits...</div>
-      <small class="fw-warn">Testnet only. Do not send mainnet NEAR to this address.</small></div>`;
+      <div class="fw-st" id="fw-st" aria-live="polite">WALLET ${store.eco.sol.toFixed(3)} SOL &middot; watching for deposits...</div>
+      <small class="fw-warn">Devnet only. Never send real SOL to this address.</small></div>`;
   gm.appendChild(el);
   let id = '', poll = 0;
   const done = () => { clearInterval(poll); el.remove(); };
@@ -580,15 +580,15 @@ async function fundWallet(root: Root, refresh: () => void) {
   try { id = (await backend.wallet!()).accountId; el.querySelector('#fw-addr')!.textContent = id; }
   catch (e) { el.remove(); oops(root, e); return; }
   if (!el.isConnected) return;                                         // closed while the wallet was opening
-  const st = el.querySelector<HTMLElement>('#fw-st')!, start = store.eco.near;
+  const st = el.querySelector<HTMLElement>('#fw-st')!, start = store.eco.sol;
   let busy = false;
   poll = window.setInterval(async () => {
     if (!el.isConnected) { clearInterval(poll); return; }
     if (busy) return; busy = true;
     try {
       await backend.sync?.(); refresh();
-      const got = store.eco.near - start;
-      st.innerHTML = got > 0.004 ? `<b class="pos">RECEIVED +${got.toFixed(2)} NEAR</b> &middot; wallet ${store.eco.near.toFixed(2)} NEAR` : `WALLET ${store.eco.near.toFixed(2)} NEAR &middot; watching for deposits...`;
+      const got = store.eco.sol - start;
+      st.innerHTML = got > 0.0004 ? `<b class="pos">RECEIVED +${got.toFixed(3)} SOL</b> &middot; wallet ${store.eco.sol.toFixed(3)} SOL` : `WALLET ${store.eco.sol.toFixed(3)} SOL &middot; watching for deposits...`;
     } catch { /* keep watching */ } finally { busy = false; }
   }, 4000);
 }
@@ -601,32 +601,30 @@ function cashier(root: Root, close: () => void) {
   const pane = $(root, '#pane');
   const exchange = () => {
     pane.innerHTML = `<div class="cs">
-      <div class="cs-window"><div class="g-lcd green"><small>WALLET &middot; TEST NEAR</small><b id="near"></b></div><div class="cs-rate">1 NEAR = ${CHIPS_PER_NEAR} CHIPS<br><small>${backend.mode === 'mock' ? 'TESTNET DEMO' : 'NEAR TESTNET'}</small></div><div class="g-lcd"><small>CHIPS</small><b id="chp"></b></div></div>
-      <div class="cs-col"><h4>BUY CHIPS</h4><div class="cs-row">${backend.mode === 'chain'
-        ? '<button class="g-key" data-a="dhalf">0.25 NEAR</button><button class="g-key" data-a="dall">ALL MY NEAR</button>'
-        : '<button class="g-key" data-a="d1">1 NEAR</button><button class="g-key" data-a="d5">5 NEAR</button>'}</div></div>
-      <div class="cs-col"><h4>CASH OUT</h4><div class="cs-row"><button class="g-key dark" data-a="w">${CHIPS_PER_NEAR} CHIPS</button><button class="g-key dark" data-a="wall">ALL CHIPS</button></div></div>
-      <div class="cs-bottom">${backend.mode === 'chain' && backend.wallet ? '<button class="g-go wide" data-a="fund"><span>FUND WALLET</span></button>' : ''}<button class="g-go wide gold" data-a="faucet"><span>GET FREE TEST NEAR</span></button></div></div>`;
-    const show = () => { $(root, '#near').textContent = store.eco.near.toFixed(2); $(root, '#chp').textContent = fmt(store.eco.chips); setBal(root); };
+      <div class="cs-window"><div class="g-lcd green"><small>WALLET &middot; TEST SOL</small><b id="near"></b></div><div class="cs-rate">1 SOL = ${fmt(CHIPS_PER_SOL)} CHIPS<br><small>${backend.mode === 'mock' ? 'OFFLINE DEMO' : 'SOLANA DEVNET'}</small></div><div class="g-lcd"><small>CHIPS</small><b id="chp"></b></div></div>
+      <div class="cs-col"><h4>BUY CHIPS</h4><div class="cs-row three"><button class="g-key" data-a="d1">0.01 SOL</button><button class="g-key" data-a="d5">0.05 SOL</button><button class="g-key" data-a="dall">ALL</button></div></div>
+      <div class="cs-col"><h4>CASH OUT</h4><div class="cs-row"><button class="g-key dark" data-a="w">10 CHIPS</button><button class="g-key dark" data-a="wall">ALL CHIPS</button></div></div>
+      <div class="cs-bottom">${backend.mode === 'chain' && backend.wallet ? '<button class="g-go wide" data-a="fund"><span>FUND WALLET</span></button>' : ''}<button class="g-go wide gold" data-a="faucet"><span>GET FREE TEST SOL</span></button></div></div>`;
+    const show = () => { $(root, '#near').textContent = store.eco.sol.toFixed(3); $(root, '#chp').textContent = fmt(store.eco.chips); setBal(root); };
     show();
     $$(pane, '[data-a]').forEach(b => b.addEventListener('click', async () => {
       const a = b.dataset.a!;
       if (a === 'fund') { fundWallet(root, show); return; }
       b.classList.add('pending'); (b as HTMLButtonElement).disabled = true; hideResult(root);
       try {
-        if (a === 'd1' || a === 'd5' || a === 'dhalf' || a === 'dall') {
-          // chain: the wallet also pays gas and keeps a small reserve, so ALL leaves 0.01 NEAR aside
-          const n = a === 'd1' ? 1 : a === 'd5' ? 5 : a === 'dhalf' ? 0.25 : Math.floor((store.eco.near - 0.01) * 100) / 100;
-          if (n <= 0) throw new BackendError('no_near', 'Your wallet is empty. Tap GET FREE TEST NEAR first.');
-          await backend.deposit(n); show(); showResult(root, 'win', 'CHIPS BOUGHT', Math.round(n * CHIPS_PER_NEAR), `${n} NEAR exchanged`);
+        if (a === 'd1' || a === 'd5' || a === 'dall') {
+          // our server pays the fee, so ALL really is all (in whole chips)
+          const n = a === 'd1' ? 0.01 : a === 'd5' ? 0.05 : Math.floor(store.eco.sol * CHIPS_PER_SOL) / CHIPS_PER_SOL;
+          if (n < 0.01) throw new BackendError('no_sol', 'Your wallet needs at least 0.01 SOL. Tap GET FREE TEST SOL first.');
+          await backend.deposit(n); show(); showResult(root, 'win', 'CHIPS BOUGHT', Math.round(n * CHIPS_PER_SOL), `${n} SOL exchanged`);
         }
-        else if (a === 'faucet') { const paid = await backend.faucet(); show(); showResult(root, 'push', 'FAUCET', paid ? `+${paid} NEAR` : 'TEST NEAR SENT', 'Free test NEAR, straight to your wallet'); }
+        else if (a === 'faucet') { const paid = await backend.faucet(); show(); showResult(root, 'push', 'FAUCET', paid ? `+${paid} SOL` : 'TEST SOL SENT', 'Free test SOL, straight to your wallet'); }
         else {
           if (a === 'wall') await backend.sync?.();      // ALL means what the chain holds now, not what the screen last showed
-          const amt = a === 'w' ? CHIPS_PER_NEAR : store.eco.chips;
+          const amt = a === 'w' ? Math.min(10, store.eco.chips) : store.eco.chips;
           if (amt <= 0) throw new BackendError('no_chips', 'You have no chips to cash out.');
           await backend.withdraw(amt); show();
-          showResult(root, 'push', 'CASHED OUT', `+${(amt / CHIPS_PER_NEAR).toFixed(2)} NEAR`, `${fmt(amt)} chips paid out`);
+          showResult(root, 'push', 'CASHED OUT', `+${(amt / CHIPS_PER_SOL).toFixed(3)} SOL`, `${fmt(amt)} chips paid out`);
         }
       } catch (e) { oops(root, e); }
       finally { b.classList.remove('pending'); (b as HTMLButtonElement).disabled = false; }
@@ -1511,7 +1509,7 @@ export function openSettings(m: HTMLElement, close: () => void, act: SettingsAct
     const b = blessingOf(store.eco.faith), p = store.profile;
     shell(root, close, 'plaza' as any, 'SETTINGS', `
     <div class="st">
-      <div class="st-card"><div class="st-name">${p?.username ?? 'Wanderer'}</div><div class="st-sub">${b.title.toUpperCase()}${b.bps ? ` &middot; BLESSING +${(b.bps / 100).toFixed(1)}%` : ''} &middot; ${backend.mode === 'mock' ? 'DEMO MODE' : 'NEAR TESTNET'}</div>
+      <div class="st-card"><div class="st-name">${p?.username ?? 'Wanderer'}</div><div class="st-sub">${b.title.toUpperCase()}${b.bps ? ` &middot; BLESSING +${(b.bps / 100).toFixed(1)}%` : ''} &middot; ${backend.mode === 'mock' ? 'DEMO MODE' : 'SOLANA DEVNET'}</div>
         <div class="stone"><div class="plate"><small>CHIPS</small><b>${fmt(store.eco.chips)}</b></div><div class="plate"><small>LUCK</small><b>${Math.floor(store.eco.luck)}</b></div><div class="plate"><small>FAITH</small><b>${Math.floor(store.eco.faith)}</b></div></div></div>
       <div class="st-grid">
         <div class="st-sec"><h4>SOUND &amp; FEEL</h4>
@@ -1524,9 +1522,8 @@ export function openSettings(m: HTMLElement, close: () => void, act: SettingsAct
           <div class="cs-row"><button class="g-key dark" data-a="tc">CASINO TOUR</button><button class="g-key dark" data-a="th">CHURCH TOUR</button></div>
           <button class="g-key dark" data-a="skip">SKIP CURRENT TOUR</button></div>
         <div class="st-sec"><h4>ACCOUNT</h4>
-          ${backend.mode === 'chain' && backend.wallet ? `<div class="st-addr" title="Your NEAR testnet wallet"><span id="st-addr">${walletId ? shortId(walletId) : '...'}</span><button class="g-key" data-a="copyaddr" aria-label="Copy wallet address">COPY</button></div>` : ''}
-          <button class="g-key dark" data-a="key" ${backend.mode === 'mock' ? 'disabled' : ''}>EXPORT MY KEY</button>
-          ${backend.signOut ? `<button class="g-key danger" data-a="signout">${backend.linkedAccount?.() ? 'SIGN OUT' : 'SIGN OUT (UNSECURED)'}</button>` : '<button class="g-key danger" data-a="reset">NEW CHARACTER</button>'}
+          ${backend.mode === 'chain' && backend.wallet ? `<div class="st-addr" title="Your Solana wallet (devnet)"><span id="st-addr">${walletId ? shortId(walletId) : '...'}</span><button class="g-key" data-a="copyaddr" aria-label="Copy wallet address">COPY</button></div>` : ''}
+          ${backend.signOut ? `<button class="g-key danger" data-a="signout">${'SIGN OUT'}</button>` : '<button class="g-key danger" data-a="reset">NEW CHARACTER</button>'}
           <div class="st-out" id="out"></div></div>
       </div>
       <p class="st-credit">Art: bubbabba &middot; Jephed, Game Between The Lines (gamebetweenthelines.com) &middot; Music &amp; sound by the team</p>
@@ -1567,8 +1564,7 @@ export function openSettings(m: HTMLElement, close: () => void, act: SettingsAct
         const out = $(root, '#out');
         if (btn.dataset.sure) { backend.signOut!(); clearProfile(); location.reload(); return; }
         btn.dataset.sure = '1'; btn.textContent = 'TAP AGAIN TO SIGN OUT';
-        out.textContent = backend.linkedAccount?.() ? 'Sign back in any time with your username and password.'
-          : 'This account has no password yet: signing out loses it and its chips. Secure it from the title screen first.';
+        out.textContent = 'Your chips stay in your account. Sign back in any time with your email.';
       }
     }));
   };

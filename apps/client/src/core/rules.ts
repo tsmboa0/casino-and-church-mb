@@ -8,7 +8,7 @@
  *   draws[k] = u32 LE of h[4k .. 4k+4]
  * and maps a draw to [0, n) with mulShift (no modulo bias): floor(draw * n / 2^32).
  */
-export const CHIPS_PER_NEAR = 100;                  // 1 chip = 0.01 NEAR = 10^22 yoctoNEAR
+export const CHIPS_PER_SOL = 1000;                  // 1 chip = 0.001 SOL
 
 export const mulShift = (draw: number, n: number) => Math.floor((draw * n) / 4294967296);
 export const drawsOf = (h: Uint8Array) => Array.from({ length: 8 }, (_, k) => (h[4 * k] | (h[4 * k + 1] << 8) | (h[4 * k + 2] << 16) | (h[4 * k + 3] << 24)) >>> 0);

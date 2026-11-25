@@ -9,7 +9,7 @@ export interface Profile {
   /** the Solana wallet this profile belongs to (none in the offline demo) */
   wallet?: string;
 }
-export interface Economy { chips: number; luck: number; faith: number; near: number; }
+export interface Economy { chips: number; luck: number; faith: number; sol: number; }
 /** counters that drive the quest board (mock; becomes on-chain records later) */
 export interface Stats {
   spins: number; flips: number; dice: number; roulette: number; tithed: number; candles: number; converted: number;
@@ -40,7 +40,7 @@ export function savePos(p: SavedPos) { try { localStorage.setItem(POS_KEY, JSON.
 type Listener = () => void;
 class Store {
   profile: Profile | null = loadProfile();
-  eco: Economy = { chips: 500, luck: 34, faith: 22, near: 10 };
+  eco: Economy = { chips: 500, luck: 34, faith: 22, sol: 0.5 };
   stats: Stats = { spins: 0, flips: 0, dice: 0, roulette: 0, tithed: 0, candles: 0, converted: 0, wagered: 0, faithEarned: 0, claimed: {}, pool: 1280, jackpot: 2500, candleAt: 0, harmonyAt: 0, settledAt: Date.now(), nextBet: 1, net: 0, history: [] };
   plots: Record<number, Plot> = {};
   constructor() {
@@ -50,7 +50,6 @@ class Store {
   change(d: Partial<Economy>) {
     const e = this.eco;
     if (d.chips) e.chips = Math.max(0, Math.round(e.chips + d.chips));
-    if (d.near) e.near = Math.max(0, Math.round((e.near + d.near) * 100) / 100);
     if (d.luck) e.luck = clamp(e.luck + d.luck, 0, 100);
     if (d.faith) e.faith = clamp(e.faith + d.faith, 0, 100);
     this.saveEco(); this.emit();

@@ -23,7 +23,8 @@
     "@solana/kit": "8.6.0",
     "phaser": "^3.90.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "@cnc/realm": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^19.3.2",
