@@ -1,0 +1,2 @@
+import { ER, A, key, ix, send, PK, get, sleep } from './lib.mjs';
+const crank = PK(process.argv[2]); console.log((await send(ER, ix('crank_cancel', { admin: key('admin').publicKey, crank }), [key('admin')], { label: 'cancel' })).sig); await sleep(3000); const a = (await get(ER, 'Market', A.market)).calls; await sleep(4000); console.log('crank account', await ER.getAccountInfo(crank) ? 'still there' : 'gone', 'new calls', (await get(ER, 'Market', A.market)).calls - a);

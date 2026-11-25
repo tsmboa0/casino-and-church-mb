@@ -596,3 +596,9 @@ body:not(.playing) #labels { display: none; }
 #install-hint .ih-how { font-size: 13px; opacity: .9; margin-bottom: 6px; }
 #install-hint .ih-ico { display: inline-block; padding: 0 5px; border: 1px solid rgba(255,255,255,.35); border-radius: 4px; font-weight: 700; }
 #install-hint .ih-row { display: flex; justify-content: center; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+
+/* ---- Privy: one PLAY button on the title, and its login over the live scene */
+.ob.title.split .cta.row .btn.play { min-width: 260px; font-size: 20px; letter-spacing: .14em; }
+.fine.bad { color: #ff8a8a; opacity: 1; }
+/* the page is not selectable (it is a game); sign-in fields must be, or Safari will not type in them */
+input, textarea, [id^="privy"] *, #headlessui-portal-root * { user-select: text; -webkit-user-select: text; }

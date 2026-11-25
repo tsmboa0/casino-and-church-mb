@@ -1,0 +1,2 @@
+import { ER, A, get } from './lib.mjs'; const m = await get(ER, 'Market', A.market); const r = m.ring.filter((x) => x.epoch).sort((a, b) => a.epoch - b.epoch); const breaks = []; let bad = 0;
+for (let i = 1; i < r.length; i++) { if (r[i].epoch !== r[i - 1].epoch + 1) breaks.push(`${r[i - 1].epoch}->${r[i].epoch}`); else if (r[i].lock_c !== r[i - 1].close_c) bad++; } console.log('rounds', r.length, 'epoch breaks', breaks.join(','), 'consecutive rounds where lock != previous close:', bad, 'voided', m.voided);

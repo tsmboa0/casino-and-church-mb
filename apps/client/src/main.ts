@@ -227,6 +227,7 @@ async function boot() {
     if (target) setTimeout(() => { if (!world.travelTo(target)) bus.emit('toast', `No place called "${target}". Open Places to see them all.`); }, 1200);
   };
   const agent = q.get('agent') === '1';
+  if (q.get('wallettest') === '1') void import('./wallet/testPanel').then((m) => m.mountTestPanel());
 
   // ---- dev/screenshot hooks
   dropBootSplash();

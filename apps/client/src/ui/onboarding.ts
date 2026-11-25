@@ -5,6 +5,7 @@ import { atlasDom } from '../core/atlasDom';
 import { icon } from './icons';
 import { backend } from '../core/backend';
 import { bus } from '../core/bus';
+import { loadWallet, shortAddress, walletEnabled } from '../wallet';
 import { NAME_MAX, PASSWORD_MIN, cleanName, nameProblem, passwordProblem } from '@cnc/shared';
 
 let MANIFEST: any = null;
@@ -36,8 +37,11 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
   MANIFEST = manifest;
   const root = document.getElementById('onboarding')!;
   root.className = 'show';
+  /** Privy login (email, then a Solana wallet). The offline demo (?demo=1) has none. */
+  const privy = walletEnabled;
+  let me: string | null = null;                    // the signed-in wallet
   /** live game (a chain backend) = real accounts; the offline demo has none */
-  const accounts = !!backend.signIn;
+  const accounts = !privy && !!backend.signIn;
   const draft: {
     name: string; avatar: string;
     securing?: boolean;                 // an existing guest is setting a password (keeps the wallet and chips)
@@ -104,11 +108,13 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
   window.visualViewport?.addEventListener('scroll', () => { if (root.classList.contains('kb')) placeStrip(); });
 
   const dots = (n: number) => `<div class="dots">${[1, 2, 3].map(i => `<i class="${i === n ? 'on' : i < n ? 'done' : ''}"></i>`).join('')}</div>`;
-  const finish = (p: Profile) => { root.className = ''; root.innerHTML = ''; onDone(p); };
+  const finish = (p: Profile) => { root.className = ''; root.innerHTML = ''; onDone(me ? { ...p, wallet: me } : p); };
+  /** the profile on this device, if it belongs to the signed-in wallet */
+  const mine = () => (store.profile && (!privy || store.profile.wallet === me) ? store.profile : null);
 
   // ---------------------------------------------------------------- 0. title
   const title = () => {
-    const p = store.profile;
+    const p = mine();
     root.innerHTML = `
     <div class="ob title split">
       ${WING_CASINO}
@@ -117,10 +123,11 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
       <p class="tagline wide">Balance is survival.</p>
       <div class="under">
         <div class="cta row">${ctaHtml(p)}</div>
-        <small class="fine">Testnet &middot; play money &middot; NEAR HACKATHON 2026</small>
+        <small class="fine" id="fine">${privy ? 'Solana devnet &middot; play money' : 'Offline demo &middot; play money'}</small>
       </div>
     </div>`;
-    root.querySelector('#play')?.addEventListener('click', nameStep);
+    root.querySelector('#play')?.addEventListener('click', () => (privy ? void signInWithPrivy() : nameStep()));
+    root.querySelector('#out')?.addEventListener('click', () => void signOutOfPrivy());
     root.querySelector('#new')?.addEventListener('click', () => { clearProfile(); store.profile = null; nameStep(); });
     root.querySelector('#cont')?.addEventListener('click', () => finish(p!));
     root.querySelector('#signin')?.addEventListener('click', signInStep);
@@ -133,6 +140,10 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
   };
   /** the title's buttons. Live game: real accounts (username + password). Offline demo: no accounts. */
   const ctaHtml = (p: Profile | null) => {
+    if (privy) {
+      if (me && p) return `<button class="btn big pulse" id="cont"><span>CONTINUE</span><small>${p.username}</small></button><button class="btn ghost" id="out">SIGN OUT</button>`;
+      return `<button class="btn big pulse play" id="play"><span>PLAY</span>${me ? `<small>${shortAddress(me)}</small>` : ''}</button>${me ? '<button class="btn ghost" id="out">SIGN OUT</button>' : ''}`;
+    }
     if (!accounts) {
       return p ? `<button class="btn big pulse" id="cont"><span>CONTINUE</span><small>${p.username}</small></button><button class="btn ghost" id="new">NEW GAME</button>`
         : `<button class="btn big pulse" id="play">PLAY THE DEMO</button>`;
@@ -142,6 +153,30 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
     // a guest wallet from before accounts existed: let its owner keep the chips by setting a password
     if (!linked && backend.hasDeviceWallet?.()) return `<button class="btn big pulse" id="secure"><span>SECURE MY ACCOUNT</span><small>${p ? p.username : 'keep your chips'}</small></button><button class="btn ghost" id="signin">SIGN IN</button>`;
     return `<button class="btn big pulse" id="signin">SIGN IN</button><button class="btn ghost" id="create">SIGN UP</button>`;
+  };
+
+  // ---------------------------------------------------------------- Privy: PLAY opens its login over the live scene
+  const say = (text: string, bad = false) => { const f = root.querySelector<HTMLElement>('#fine'); if (f) { f.textContent = text; f.classList.toggle('bad', bad); } };
+  const signInWithPrivy = async () => {
+    const b = root.querySelector<HTMLButtonElement>('#play'); if (!b || b.disabled) return;
+    b.disabled = true; b.querySelector('span')!.textContent = me ? 'PLAY' : 'ONE MOMENT';
+    try {
+      const w = await loadWallet();
+      b.disabled = false; b.querySelector('span')!.textContent = 'PLAY';   // the player may close Privy and press PLAY again
+      const a = await w.login();
+      if (!a) return;
+      me = a;
+      const p = mine();
+      if (p) finish(p); else nameStep();
+    } catch (e) {
+      b.disabled = false; b.querySelector('span')!.textContent = 'PLAY';
+      say(e instanceof Error ? e.message : 'Could not open sign-in. Try again.', true);
+    }
+  };
+  const signOutOfPrivy = async () => {
+    const b = root.querySelector<HTMLButtonElement>('#out'); if (!b || b.disabled) return;
+    b.disabled = true;
+    try { await (await loadWallet()).logout(); me = null; draft.name = ''; title(); } catch { b.disabled = false; say('Could not sign out. Try again.', true); }
   };
 
   // ---------------------------------------------------------------- sign in (any device)
@@ -225,6 +260,7 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
     const note = root.querySelector('#wnote') as HTMLElement;
     note.innerHTML = accounts
       ? `${icon('wallet', 12)}<span>${draft.securing ? 'Your NEAR wallet on this device' : 'A NEAR wallet is created for you. It'} is encrypted with your password on this device; our server only ever stores that locked copy.</span>`
+      : me ? `${icon('wallet', 12)}<span>Your Solana wallet ${shortAddress(me)} is ready.</span>`
       : `${icon('wallet', 12)}<span>Demo mode: chips are pretend and nothing is saved on chain.</span>`;
     note.hidden = false;
     // live game: the password creates (or secures) the account before the avatar step
@@ -305,6 +341,8 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
   };
 
   title();
+  // load Privy behind the title: PLAY opens at once, and somebody already signed in sees CONTINUE
+  if (privy) void loadWallet().then((w) => { if (!w.address() || me || !root.querySelector('#play')) return; me = w.address(); title(); }).catch(() => { /* PLAY tries again and says why */ });
 }
 
 /** "Tap to start": the first user gesture, which is what lets the browser play music from the home page on. */

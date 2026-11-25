@@ -1,0 +1,51 @@
+{
+ "at": "2026-11-25T09:48:35.436Z",
+ "region": "eu",
+ "cu": [
+  {
+   "burn": 0,
+   "settled": true,
+   "cu": 33733,
+   "err": null,
+   "log": "Program 55dcwejoNy2ggstgmeCrYPQfKwenYK1wrokuTSyZTSkp consumed 7343 of 274167 compute units"
+  },
+  {
+   "burn": 5000,
+   "settled": true,
+   "cu": 83451,
+   "err": null,
+   "log": "Program 55dcwejoNy2ggstgmeCrYPQfKwenYK1wrokuTSyZTSkp consumed 52330 of 269436 compute units"
+  },
+  {
+   "burn": 20000,
+   "settled": true,
+   "cu": 223519,
+   "err": null,
+   "log": "Program 55dcwejoNy2ggstgmeCrYPQfKwenYK1wrokuTSyZTSkp consumed 187330 of 264368 compute units"
+  },
+  {
+   "burn": 60000,
+   "settled": false,
+   "cu": 300043,
+   "err": {
+    "InstructionError": [
+     1,
+     "ProgramFailedToComplete"
+    ]
+   },
+   "log": "Program 55dcwejoNy2ggstgmeCrYPQfKwenYK1wrokuTSyZTSkp consumed 267446 of 267446 compute units"
+  },
+  {
+   "burn": 120000,
+   "settled": false,
+   "cu": 300044,
+   "err": {
+    "InstructionError": [
+     1,
+     "ProgramFailedToComplete"
+    ]
+   },
+   "log": "Program 55dcwejoNy2ggstgmeCrYPQfKwenYK1wrokuTSyZTSkp consumed 269138 of 269138 compute units"
+  }
+ ]
+}

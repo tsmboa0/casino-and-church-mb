@@ -1,0 +1,3 @@
+import { ER, A, get, PROGRAM, VRF } from './lib.mjs'; const h = await get(ER, 'House', A.house); console.log('house', JSON.stringify(h));
+const s = await ER.getSignaturesForAddress(A.house, { limit: 40 }); const now = Date.now() / 1000; console.log('house sigs', s.length, 'newest age', s[0] && Math.round(now - s[0].blockTime), 'errs', s.filter((x) => x.err).length);
+for (const x of s.slice(0, 8)) { const t = await ER.getTransaction(x.signature, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' }); console.log(Math.round(now - x.blockTime) + 's', x.err ? JSON.stringify(x.err) : 'ok', (t?.meta?.logMessages ?? []).filter((l) => /Instruction:|Error|failed/.test(l)).join(' ; ').slice(0, 260), t?.meta?.computeUnitsConsumed); }

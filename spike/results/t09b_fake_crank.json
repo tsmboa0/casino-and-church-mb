@@ -1,0 +1,15 @@
+{
+ "at": "2026-11-25T10:36:31.541Z",
+ "region": "eu",
+ "seconds": 191,
+ "realCallsPerS": 1.17,
+ "roundsMoved": 3,
+ "byCrankMoved": 3,
+ "byKeeperMoved": 0,
+ "voidedMoved": 0,
+ "fakeTicksHarmless": 1917,
+ "fakeTicksRefused": 13,
+ "codes": {
+  "{\"InstructionError\":[1,{\"Custom\":6004}]}": 13
+ }
+}

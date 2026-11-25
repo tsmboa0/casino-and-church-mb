@@ -23,7 +23,7 @@ class InputState {
       c: 'menu', v: 'context',
     };
     window.addEventListener('keydown', (e) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+      if ((e.target as HTMLElement)?.tagName === 'INPUT' || !e.key) return;      // autofill sends key events with no key
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
       if (!e.repeat) {
@@ -33,6 +33,7 @@ class InputState {
       this.recompute();
     });
     window.addEventListener('keyup', (e) => {
+      if (!e.key) return;
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       this.held.delete(k);
       if (map[k]) this.release(map[k]);

@@ -6,6 +6,8 @@ export interface Profile {
   avatar: string;
   startRealm: Realm;
   toursDone: { casino: boolean; church: boolean };
+  /** the Solana wallet this profile belongs to (none in the offline demo) */
+  wallet?: string;
 }
 export interface Economy { chips: number; luck: number; faith: number; near: number; }
 /** counters that drive the quest board (mock; becomes on-chain records later) */

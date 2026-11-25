@@ -1,0 +1,60 @@
+{
+ "at": "2026-11-25T10:33:01.958Z",
+ "region": "eu",
+ "minutes": 62,
+ "head": {
+  "enabled": 1,
+  "epoch": 63,
+  "open_lock_ts": 1795602829,
+  "live_epoch": 62,
+  "live_lock_c": 5888856,
+  "calls": 4328,
+  "last_call_ts": 1795602776,
+  "max_gap_s": 77,
+  "closed": 59,
+  "voided": 2,
+  "by_crank": 61,
+  "by_keeper": 0,
+  "stale_price": 0,
+  "_owner": "55dcwejoNy2ggstgmeCrYPQfKwenYK1wrokuTSyZTSkp",
+  "_lamports": 10916920
+ },
+ "readErrors": 0,
+ "rounds": 59,
+ "lateS": {
+  "n": 59,
+  "min": 0,
+  "p50": 0,
+  "p90": 0,
+  "p95": 0,
+  "max": 0
+ },
+ "priceAgeS": {
+  "n": 59,
+  "min": 0,
+  "p50": 0,
+  "p90": 1,
+  "p95": 1,
+  "max": 1
+ },
+ "gapBetweenClosesS": {
+  "n": 58,
+  "min": 60,
+  "p50": 60,
+  "p90": 60,
+  "p95": 60,
+  "max": 204
+ },
+ "chained": false,
+ "up": 31,
+ "down": 28,
+ "tie": 0,
+ "lastTickAgeS": {
+  "n": 673,
+  "min": 0,
+  "p50": 1,
+  "p90": 1,
+  "p95": 2,
+  "max": 74
+ }
+}

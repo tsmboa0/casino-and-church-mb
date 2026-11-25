@@ -1,0 +1,17 @@
+{
+ "at": "2026-11-25T09:27:18.581Z",
+ "region": "eu",
+ "strangerEarly": "accepted",
+ "earlyChangedNothing": true,
+ "strangerWhenDue": "refused Simulation failed. \nMessage: transaction verification error: Error processing Instruction ",
+ "strangerAsKeeper": "refused Simulation failed. \nMessage: transaction verification error: Error processing Instruction ",
+ "keeperWhenDue": "accepted",
+ "keeperMoved": true,
+ "lockPrice": 59027.25,
+ "strangerVoidAfterGrace": "accepted",
+ "voided": 2,
+ "afterVoid": {
+  "epoch": 3,
+  "live": 0
+ }
+}

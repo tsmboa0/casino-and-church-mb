@@ -1,0 +1,6 @@
+// samples the market every 5 s; run in the background for an hour
+import { ER, A, get, record, sleep, stats, FEED } from './lib.mjs';
+const mins = Number(process.env.MIN ?? 62), end = Date.now() + mins * 60_000; const skew = []; let errs = 0, m; const rounds = new Map(); let t = 0;
+while (Date.now() < end) { try { m = await get(ER, 'Market', A.market); skew.push(Math.abs(Date.now() / 1000 - m.last_call_ts)); m.ring.forEach((r) => r.epoch && rounds.set(r.epoch, r)); } catch { errs++; } if (++t % 60 === 0) console.log(new Date().toISOString().slice(11, 19), 'calls', m.calls, 'closed', m.closed, 'void', m.voided, 'gap', m.max_gap_s, 'byCrank', m.by_crank); await sleep(5000); }
+const rs = [...rounds.values()].sort((a, b) => a.epoch - b.epoch); const { ring, ...head } = m;
+record('t08_t10_crank_hour', { minutes: mins, head, readErrors: errs, rounds: rs.length, lateS: stats(rs.map((r) => r.late_s)), priceAgeS: stats(rs.map((r) => r.price_age_s)), gapBetweenClosesS: stats(rs.slice(1).map((r, i) => r.closed_ts - rs[i].closed_ts)), chained: rs.slice(1).every((r, i) => r.epoch === rs[i].epoch + 1 && r.lock_c === rs[i].close_c), up: rs.filter((r) => r.close_c > r.lock_c).length, down: rs.filter((r) => r.close_c < r.lock_c).length, tie: rs.filter((r) => r.close_c === r.lock_c).length, lastTickAgeS: stats(skew.map((x) => Math.round(x))) });

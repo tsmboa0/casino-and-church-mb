@@ -116,7 +116,7 @@ export function mountModal(actions: { replay: (r: Realm) => void; reset: () => v
     bus.emit('modalOpened');
     open(`<div class="sh-h"><h3>Leave the game?</h3></div><p>Your chips, LUCK and FAITH are saved on this device.</p>
       <div class="sh-f"><button class="btn ghost" data-close>STAY</button><button class="btn danger-fill" id="leave">EXIT</button></div>`);
-    m.querySelector('#leave')!.addEventListener('click', () => { try { document.exitFullscreen?.(); } catch { /* */ } location.reload(); });
+    m.querySelector('#leave')!.addEventListener('click', () => { if (document.fullscreenElement) document.exitFullscreen().catch(() => { /* already leaving */ }); location.reload(); });
   });
   bus.on('panel', (kind: PanelKind, label: string, id?: string) => {
     if (openGame(kind, m, close, id)) return;

@@ -1,0 +1,16 @@
+{
+ "at": "2026-11-25T09:23:19.247Z",
+ "region": "eu",
+ "n": 20,
+ "min": 627,
+ "p50": 686,
+ "p90": 1791,
+ "p95": 2501,
+ "max": 2501,
+ "failed": 0,
+ "credited": 40000000,
+ "expected": 40000000,
+ "chips": 40000000,
+ "noDouble": true,
+ "sessionKeyLamportsL1": 0
+}

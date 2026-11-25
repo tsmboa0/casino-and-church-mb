@@ -1,0 +1,21 @@
+{
+ "at": "2026-11-25T09:24:47.681Z",
+ "region": "eu",
+ "afterOneCashOut": [
+  "ok",
+  "ok",
+  "ok",
+  "ok",
+  "ok",
+  "ok",
+  "ok",
+  "ok",
+  "ok",
+  "Simulation failed. \nMessage: transaction verification error: Error processing Instruction 0: custom program er",
+  "Simulation failed. \nMessage: transaction verification error: Error processing Instruction 0: custom program er",
+  "Simulation failed. \nMessage: transaction verification error: Error processing Instruction 0: custom program er",
+  "Simulation failed. \nMessage: transaction verification error: Error processing Instruction 0: custom program er"
+ ],
+ "undelegatedMs": 1770,
+ "redelegateAndCommit": "ok"
+}
