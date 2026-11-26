@@ -1,0 +1,112 @@
+{
+ "at": "2026-11-26T11:25:00.066Z",
+ "checks": {
+  "an action other than the one written down": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "the Father calling a Happy Hour": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "the Don giving alms": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "a LUCK rate above 80": {
+   "pass": true,
+   "info": "BadArgs"
+  },
+  "a Vigil of 61 minutes": {
+   "pass": true,
+   "info": "BadArgs"
+  },
+  "a candle worth 5 FAITH": {
+   "pass": true,
+   "info": "BadArgs"
+  },
+  "a Vigil, written on L1 first": {
+   "pass": true,
+   "info": {
+    "anchor": "4D7LWHZ47QDinisjojugHjv3SP275zkoN369Yuo4rtj8uEKTUzjVkU86ZRHDTD4QkK23pMCaL2QAiU1f1dyj5RsP",
+    "act": "4fnSJawv6wyeszYbgR5XhWtUanSXkARsvZy9eNkPMNhTSZpPqjSVv1yNi149TsKbdNQNDHSo3CzmimsWgkA1QaXc"
+   }
+  },
+  "the L1 record carries the action and the proof fields": {
+   "pass": true,
+   "info": ""
+  },
+  "a second Vigil at once": {
+   "pass": true,
+   "info": "CampaignClosed"
+  },
+  "and its end": {
+   "pass": true,
+   "info": ""
+  },
+  "the jackpot topped up from the vault": {
+   "pass": true,
+   "info": ""
+  },
+  "alms for someone who never played": {
+   "pass": true,
+   "info": "NotAllowed"
+  },
+  "alms: bonus chips from the treasury": {
+   "pass": true,
+   "info": ""
+  },
+  "alms twice in a day": {
+   "pass": true,
+   "info": "Cooldown"
+  },
+  "a candle’s FAITH, one small step": {
+   "pass": true,
+   "info": {
+    "from": 3000,
+    "to": 3200
+   }
+  },
+  "a second change within half an hour": {
+   "pass": true,
+   "info": "TooEarly"
+  },
+  "NEAR AI is configured": {
+   "pass": true,
+   "info": "Qwen/Qwen3.8-27B"
+  },
+  "fortuna: a decision, signed in the enclave": {
+   "pass": true,
+   "info": {
+    "ms": 8953,
+    "action": "none",
+    "applied": true,
+    "line": "Quiet night. The dice are cold, but the floor is ready. I'll keep the lights on for the next soul who wanders in.",
+    "reason": null,
+    "anchor": "4GothFEzvQ"
+   }
+  },
+  "nakamoto: a decision, signed in the enclave": {
+   "pass": true,
+   "info": {
+    "ms": 8136,
+    "action": "none",
+    "applied": true,
+    "line": "The candles burn low, but the hearth is warm. Rest, weary soul; the light will find you when you are ready.",
+    "reason": null,
+    "anchor": "2JrB7otmJp"
+   }
+  },
+  "a chat answer, on topic": {
+   "pass": true,
+   "info": {
+    "answer": "I have no recent decrees to report; the floor is quiet. I did, however, grant 10 alms today to a wandering soul. The treasury stands at 666, and the jackpot pool holds 279. I remain vigilant, awaiting your tithes.",
+    "signed": true
+   }
+  },
+  "off-topic questions are refused in character": {
+   "pass": true,
+   "info": "I only talk shop in my house. Ask me about the games, your LUCK, the Wheel, or what I am planning."
+  }
+ }
+}

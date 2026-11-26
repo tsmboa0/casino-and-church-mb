@@ -398,6 +398,27 @@ impl Market {
     pub const SPACE: usize = 8 + std::mem::size_of::<Market>();
 }
 
+/// L1 only: the last 64 host decisions, anchored before they may act
+#[zero_copy]
+#[repr(C)]
+pub struct Anchored {
+    pub hash: [u8; 32],
+    pub at: i64,
+    pub agent: u8,
+    pub _pad: [u8; 7],
+}
+#[account(zero_copy)]
+#[repr(C)]
+pub struct DecisionLog {
+    pub entries: [Anchored; 64],
+    pub head: u64,
+    pub bump: u8,
+    pub _pad: [u8; 7],
+}
+impl DecisionLog {
+    pub const SPACE: usize = 8 + std::mem::size_of::<DecisionLog>();
+}
+
 /// Founders' Row
 #[zero_copy]
 #[repr(C)]

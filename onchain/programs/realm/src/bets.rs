@@ -121,23 +121,20 @@ pub fn harmony_cost(h: &House) -> u32 {
 /// `real`: lamports of real chips in the bet. Free chips earn no LUCK.
 pub fn luck_award(h: &House, game: u8, real: u64, now: i64) -> u32 {
     let weight = LUCK_WEIGHT.get(usize::from(game)).copied().unwrap_or(0);
-    let mut raw = (u128::from(real) * u128::from(h.params.luck_per_chip_milli) * u128::from(weight) / 100 / u128::from(CHIP)) as u64;
-    let mut cap = u64::from(h.params.luck_per_bet_cap_milli);
-    let e = &h.events[0];
-    if e.active != 0 && now < e.ends {
-        raw = raw.saturating_mul(10_000 + u64::from(e.boost_bps)) / 10_000;
-        cap = cap * 3 / 2;
-    }
-    raw.min(cap) as u32
+    let _ = now;
+    let raw = (u128::from(real) * u128::from(h.params.luck_per_chip_milli) * u128::from(weight) / 100 / u128::from(CHIP)) as u64;
+    raw.min(u64::from(h.params.luck_per_bet_cap_milli)) as u32
 }
 pub fn add_luck(p: &mut Player, gain: u32) -> u32 {
     let applied = gain.min(METER_MAX - p.luck_milli.min(METER_MAX));
     p.luck_milli += applied;
     applied
 }
-/// From the treasury, within the day's cap.
+/// From the treasury, within the day's cap. Don Fortuna's Happy Hour doubles it (the treasury pays, so the house cannot
+/// lose by it).
 pub fn take_blessing(h: &mut House, base: u64, b: u16, now: i64) -> u64 {
-    let want = bps(base, u64::from(b));
+    let happy = h.events[0].active != 0 && now < h.events[0].ends;
+    let want = bps(base, u64::from(b) * if happy { 2 } else { 1 });
     if want == 0 { return 0; }
     let day = now.div_euclid(DAY_S);
     if h.blessing_day != day {
@@ -393,6 +390,20 @@ pub mod tests {
         h.params.max_bet_chips = 10;
         assert!(place(&mut p, &mut h, SLOTS, 10, 0, [0; 32], 0).is_ok());
         assert_eq!(h.reserved, 1_000 * CHIP);
+    }
+
+    #[test]
+    fn a_happy_hour_doubles_blessings_and_adds_no_luck() {
+        let (mut p, mut h) = rig(5_000, 100);
+        p.faith_milli = 100_000; // +3%
+        let t0 = 10 * DAY_S;
+        h.events[0] = crate::state::TimedEvent { started: t0, ends: t0 + 600, boost_bps: 10_000, active: 1 };
+        let s = place(&mut p, &mut h, COIN, 10, 0, [0; 32], t0).unwrap();
+        let r = settle(&mut p, &mut h, &heads(), s, t0 + 1).unwrap();
+        assert_eq!((r.blessing, r.luck_gain_milli), (1_164_000, 400), "6% of 19.4, and the usual LUCK");
+        let s = place(&mut p, &mut h, COIN, 10, 0, [0; 32], t0 + 600).unwrap();
+        assert_eq!(settle(&mut p, &mut h, &heads(), s, t0 + 600).unwrap().blessing, 582_000, "over");
+        balanced(&h);
     }
 
     #[test]

@@ -973,7 +973,7 @@ function verifyView(root: Root, close: () => void, back: () => void, d?: AgentDe
       ${sampleMode && d ? `<div class="vf-note">${d.reason ? `<b>${esc(d.reason)}.</b> ` : ''}This decision came from the offline demo or the rule fallback, so it was never signed. Below is a <b>real</b> decision Don Fortuna made on NEAR AI Cloud on ${new Date(SAMPLE_PROOF.attestationAt).toUTCString().slice(5, 16)}, checked live in your browser.</div>` : ''}
       ${d && !sampleMode ? `<div class="vf-line ${d.agent}"><b>${d.agent === 'fortuna' ? 'DON FORTUNA' : 'FATHER NAKAMOTO'}</b><q>${esc(d.line)}</q></div>` : ''}
       <div class="g-lab" style="text-align:left">WHAT THE AI ACTUALLY ANSWERED</div><pre class="vf-raw" id="raw"></pre>
-      <div class="vf-meta"><span>MODEL <b>${proof.model}</b></span><span>SIGNER <b>${proof.signingAddress.slice(0, 10)}&hellip;${proof.signingAddress.slice(-6)}</b></span>${proof.txHash ? `<span>ON CHAIN ${txLink(proof.txHash)}</span>` : ''}</div>
+      <div class="vf-meta"><span>MODEL <b>${proof.model}</b></span><span>SIGNER <b>${proof.signingAddress.slice(0, 10)}&hellip;${proof.signingAddress.slice(-6)}</b></span>${d?.anchorTx && backend.l1Url ? `<span>L1 RECORD <a class="txl" href="${backend.l1Url(d.anchorTx)}" target="_blank" rel="noopener">${d.anchorTx.slice(0, 4)}&hellip;${d.anchorTx.slice(-3)} &#8599;</a></span>` : ''}${proof.txHash ? `<span>ACTED ${txLink(proof.txHash)}</span>` : ''}</div>
     </div>
     <div class="vf-r">
       <div class="g-lab">CHECKED IN YOUR BROWSER</div>
@@ -982,8 +982,9 @@ function verifyView(root: Root, close: () => void, back: () => void, d?: AgentDe
       <div class="cs-row"><button class="g-key" id="again">CHECK AGAIN</button><button class="g-key dark" id="bk">BACK</button></div>
     </div>
   </div>`);
-  const run = () => {
+  const run = async () => {
     const r = verifyProof(proof);
+    if (d && !sampleMode && backend.checkAnchor) { const a = await backend.checkAnchor(d).catch(() => ({ label: 'Written on Solana before it acted', ok: false, detail: 'could not reach Solana' })); r.checks.push(a); r.ok &&= a.ok; }
     try { $(root, '#raw').textContent = JSON.stringify(JSON.parse(r.reply), null, 2); } catch { $(root, '#raw').textContent = r.reply; }
     const box = $(root, '#checks'); box.innerHTML = ''; $(root, '#verdict').className = 'vf-verdict'; $(root, '#verdict').textContent = '';
     r.checks.forEach((c, i) => setTimeout(() => {
@@ -992,8 +993,8 @@ function verifyView(root: Root, close: () => void, back: () => void, d?: AgentDe
       if (i === r.checks.length - 1) { const v = $(root, '#verdict'); v.className = `vf-verdict ${r.ok ? 'ok' : 'bad'}`; v.textContent = r.ok ? 'VERIFIED. Nobody edited this decision after the AI made it.' : 'NOT VERIFIED'; }
     }, 380 * (i + 1)));
   };
-  run();
-  $(root, '#again').addEventListener('click', run);
+  void run();
+  $(root, '#again').addEventListener('click', () => void run());
   $(root, '#bk').addEventListener('click', back);
 }
 
@@ -1001,14 +1002,14 @@ function verifyView(root: Root, close: () => void, back: () => void, d?: AgentDe
 function honestView(root: Root, close: () => void, back: () => void) {
   shell(root, close, 'plaza' as any, 'HOW THE AI IS KEPT HONEST', `
   <div class="hn">
-    ${[['&#9881;', 'Policy, never outcomes', 'The hosts set house rules (max bet, Happy Hours, Vigils, alms). They never touch the dice, the cards or the payout tables. Every bet is still dealt by commit-reveal and you can check it.'],
-       ['&#9878;', 'Hard limits in the contract', 'Every lever has bounds the NEAR contract enforces: events last 10 to 60 minutes and boost +10% to +50%, alms only go to players who really need them, daily caps on every grant.'],
+    ${[['&#9881;', 'Policy, never outcomes', 'The hosts set house rules (max bet, Happy Hours, Vigils, alms). They never touch the dice, the cards or the payout tables. Every bet is settled by verifiable randomness, and you can check it.'],
+       ['&#9878;', 'Hard limits in the program', 'Every lever has bounds the Solana program enforces: steps of 25% at most, events of 10 to 60 minutes, alms only for players who really need them, daily caps on every grant. A host can only use its own tools.'],
        ['&#128274;', 'Signed in secure hardware', 'Each decision is made by a model running inside NEAR AI Cloud\'s attested hardware (Intel TDX + NVIDIA). The answer is signed there, before anyone could touch it.'],
-       ['&#9939;', 'Anchored on chain, public log', 'The signature goes on chain in the same transaction as the action. Anyone can re-check any decision, like you can right here. And a human can still pause everything.']]
+       ['&#9939;', 'Written down before it acts', 'Each decision, with its signature, is written on Solana first. The game only does what was written there, once. Anyone can re-check any decision, like you can right here. And a human can still pause everything.']]
       .map(([i, t, d]) => `<div class="hn-c"><i>${i}</i><b>${t}</b><p>${d}</p></div>`).join('')}
   </div>
   <div class="cs-row" style="max-width:420px;margin:4px auto 0"><button class="g-key" id="sample">VERIFY A REAL DECISION</button><button class="g-key dark" id="bk">BACK</button></div>`);
-  $(root, '#sample').addEventListener('click', () => verifyView(root, close, () => honestView(root, close, back)));
+  $(root, '#sample').addEventListener('click', async () => { const live = (await loadFeed('all').catch(() => [] as AgentDecision[])).find(x => x.proof && x.applied); verifyView(root, close, () => honestView(root, close, back), live); });
   $(root, '#bk').addEventListener('click', back);
 }
 
@@ -1026,7 +1027,7 @@ function monitor(root: Root, close: () => void) {
         <div class="crt"><small>VAULT</small><b>${st ? fmt(st.vault) : '--'}</b><div class="crt-bar"><i style="width:${st ? Math.max(4, Math.min(100, (st.vaultFree / Math.max(1, st.vault)) * 100)) : 0}%"></i></div><em>${st ? fmt(st.vaultFree) : '--'} FREE</em></div>
         <div class="crt"><small>TODAY</small><b class="${st && st.houseNet24h < 0 ? 'neg' : ''}">${st ? (st.houseNet24h >= 0 ? '+' : '') + fmt(st.houseNet24h) : '--'}</b><em>HOUSE NET &middot; ${st ? fmt(st.volume24h) : '--'} WAGERED</em><em>EDGE ${st ? (st.edgeRealized24h * 100).toFixed(1) : '--'}% / ${st ? (st.edgeExpected * 100).toFixed(1) : '--'}% EXPECTED</em></div>
         <div class="crt"><small>THE FLOOR</small><b>${st ? st.playersOnline : '--'} <span>ONLINE</span></b><div class="tug"><i style="width:${tug}%"></i></div><em>CASINO ${st?.inCasino ?? '-'} &middot; CHURCH ${st?.inChurch ?? '-'}</em></div>
-        <div class="crt amber"><small>HOUSE RULES</small><b>MAX ${st ? st.maxBet : '--'}</b><em>LUCK ${st ? (st.luckPerChipMilli / 1000).toFixed(2) : '--'} PER CHIP</em><em class="${hh ? 'live' : ''}">${hh ? `HAPPY HOUR +${hh.boostBps / 100}% &middot; <span id="hh">${mmss(hh.endsAt - Date.now())}</span>` : 'NO HAPPY HOUR'}</em></div>
+        <div class="crt amber"><small>HOUSE RULES</small><b>MAX ${st ? st.maxBet : '--'}</b><em>LUCK ${st ? (st.luckPerChipMilli / 1000).toFixed(2) : '--'} PER CHIP</em><em class="${hh ? 'live' : ''}">${hh ? `HAPPY HOUR &middot; BLESSINGS &times;2 &middot; <span id="hh">${mmss(hh.endsAt - Date.now())}</span>` : 'NO HAPPY HOUR'}</em></div>
         <div class="crt"><small>BIGGEST WIN TODAY</small><b>${st?.biggestWin24h ? fmt(st.biggestWin24h.chips) : '--'}</b><em>${st?.biggestWin24h ? `${st.biggestWin24h.name} &middot; ${GAME_NAME[st.biggestWin24h.game] ?? st.biggestWin24h.game}` : 'NO WINNER YET'}</em></div>
         <div class="crt amber"><small>JACKPOT POOL</small><b>${st ? fmt(st.jackpot) : '--'}</b><em>HARMONY WHEEL &middot; CROSSROADS</em></div>
       </div>
@@ -1077,7 +1078,7 @@ function board(root: Root, close: () => void) {
     const side = (a: AgentId) => {
       const e = ev.find(x => x.by === a), mine = feed.filter(d => d.agent === a);
       return `<div class="bd-side ${a}"><div class="bd-who">${a === 'fortuna' ? 'DON FORTUNA' : 'FATHER NAKAMOTO'}<small>${a === 'fortuna' ? 'THE CASINO' : 'THE CHURCH'}</small></div>
-        <div class="bd-ev ${e ? 'live' : ''}">${e ? `${e.kind === 'happy_hour' ? 'HAPPY HOUR' : 'VIGIL'} &middot; ${e.kind === 'happy_hour' ? 'LUCK' : 'FAITH'} +${e.boostBps / 100}%<b data-end="${e.endsAt}">${mmss(e.endsAt - Date.now())}</b>` : 'NO EVENT RIGHT NOW'}</div>
+        <div class="bd-ev ${e ? 'live' : ''}">${e ? `${e.kind === 'happy_hour' ? 'HAPPY HOUR &middot; BLESSINGS &times;2' : `VIGIL &middot; FAITH +${e.boostBps / 100}%`}<b data-end="${e.endsAt}">${mmss(e.endsAt - Date.now())}</b>` : 'NO EVENT RIGHT NOW'}</div>
         <div class="ai-list">${mine.length ? mine.slice(0, 3).map(decisionRow).join('') : emptyFeed(a === 'fortuna' ? 'Don Fortuna' : 'Father Nakamoto')}</div></div>`;
     };
     const c = hs?.inCasino ?? 0, h = hs?.inChurch ?? 0, pct = c + h ? Math.round((c / (c + h)) * 100) : 50;

@@ -18,3 +18,10 @@ test('blackjack cards: the same vectors the program is tested with', () => {
   const all = JSON.parse(fs.readFileSync(new URL('../../../onchain/programs/realm/bj_vectors.json', import.meta.url), 'utf8')) as { r: string; used: string; cards: number[] }[]; assert.ok(all.length >= 500);
   for (const v of all) { const s = new Shoe(Uint8Array.from(Buffer.from(v.r, 'hex')), BigInt(v.used)); assert.deepEqual(v.cards.map(() => s.draw()), v.cards); }
 });
+test('the decision hash is the program’s', async () => {
+  const { decisionHash, hostCallHashBytes } = await import('../src/index.ts');
+  // onchain hosts.rs: tag, then three u32 LE
+  assert.deepEqual([...hostCallHashBytes({ do: 'start_event', kind: 1, minutes: 20, boost_bps: 2000 })], [3, 1, 0, 0, 0, 20, 0, 0, 0, 208, 7, 0, 0]);
+  const h = decisionHash(new Uint8Array(16).fill(7), 1, new Uint8Array(32).fill(9), { do: 'start_event', kind: 1, minutes: 20, boost_bps: 2000 }); assert.equal(h.length, 32);
+  assert.notDeepEqual(h, decisionHash(new Uint8Array(16).fill(7), 1, new Uint8Array(32).fill(9), { do: 'start_event', kind: 1, minutes: 20, boost_bps: 2001 }));
+});

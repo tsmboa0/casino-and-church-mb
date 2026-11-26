@@ -1,9 +1,9 @@
 import cors from '@fastify/cors'; import Fastify from 'fastify'; import type { FastifyRequest } from 'fastify';
 import { addr, b58decode, b64decode, b64encode, buildTx, CHIP, compileMessage, decodeBoard, decodeHouse, decodePlayer, hasClaimed, ix, REALM, type Ix, type Rpc } from '@cnc/realm';
 import { campaignProblem, cleanName, nameKey, nameProblem, type NewCampaign } from '@cnc/shared';
-import { verifyPrivy } from './privy.ts'; import { FAUCET_FLOOR, SETUP_FLOOR, type Config } from './config.ts'; import { HttpError, type Sponsor } from './sponsor.ts'; import type { Keeper } from './keeper.ts'; import type { Indexer } from './indexer.ts'; import type { MarketKeeper } from './market.ts'; import type { SolStore } from './store.ts';
+import { verifyPrivy } from './privy.ts'; import { FAUCET_FLOOR, SETUP_FLOOR, type Config } from './config.ts'; import { HttpError, type Sponsor } from './sponsor.ts'; import type { Keeper } from './keeper.ts'; import type { Indexer } from './indexer.ts'; import type { MarketKeeper } from './market.ts'; import type { Hosts } from './hosts/service.ts'; import { players, presence } from './hosts/observe.ts'; import type { SolStore } from './store.ts';
 
-export interface Deps { config: Config; store: SolStore; l1: Rpc; er: Rpc; sponsor: Sponsor | null; keeper: Keeper | null; indexer?: Indexer | null; market?: MarketKeeper | null }
+export interface Deps { config: Config; store: SolStore; l1: Rpc; er: Rpc; sponsor: Sponsor | null; keeper: Keeper | null; indexer?: Indexer | null; market?: MarketKeeper | null; hosts?: Hosts | null }
 const DAY = 86_400_000;
 const wallet = (v: unknown) => { const s = String(v ?? ''); try { if (b58decode(s).length === 32) return s; } catch { /* */ } throw new HttpError(400, 'bad_args', 'That is not a Solana address.'); };
 export function buildApp(d: Deps) {
@@ -20,7 +20,7 @@ export function buildApp(d: Deps) {
     if (health && Date.now() - health.at < 5_000) return health.body;
     const safe = async <T>(f: () => Promise<T>) => { try { return await f(); } catch { return null; } };
     const [l1Slot, erSlot, bal, house] = await Promise.all([safe(() => d.l1.slot()), safe(() => d.er.slot()), safe(() => d.l1.balance(d.config.sponsor?.address ?? '')), safe(async () => decodeHouse((await d.er.account(addr.house()))!.data))]);
-    const body = { ok: l1Slot !== null && erSlot !== null && !!house && !house.paused, program: REALM, l1: { up: l1Slot !== null, slot: l1Slot }, rollup: { up: erSlot !== null, slot: erSlot, url: d.config.er }, paused: house?.paused ?? null, sponsor: { address: d.config.sponsor?.address ?? null, sol: bal === null ? null : Number(bal) / 1e9, faucet: bal !== null && bal > FAUCET_FLOOR, accounts: bal !== null && bal > SETUP_FLOOR }, keeper: d.keeper?.status ?? null, books: d.keeper?.books ?? null, indexer: d.indexer?.status ?? null, market: d.market?.status ?? null, vault_chips: house ? Number(house.vault / CHIP) : null, players: await d.store.count() };
+    const body = { ok: l1Slot !== null && erSlot !== null && !!house && !house.paused, program: REALM, l1: { up: l1Slot !== null, slot: l1Slot }, rollup: { up: erSlot !== null, slot: erSlot, url: d.config.er }, paused: house?.paused ?? null, sponsor: { address: d.config.sponsor?.address ?? null, sol: bal === null ? null : Number(bal) / 1e9, faucet: bal !== null && bal > FAUCET_FLOOR, accounts: bal !== null && bal > SETUP_FLOOR }, keeper: d.keeper?.status ?? null, books: d.keeper?.books ?? null, indexer: d.indexer?.status ?? null, market: d.market?.status ?? null, hosts: d.hosts?.status() ?? null, vault_chips: house ? Number(house.vault / CHIP) : null, players: await d.store.count() };
     health = { at: Date.now(), body }; return body;
   });
   app.get('/me', async (q) => { const r = await d.store.byDid(did(q)); return r ? { wallet: r.wallet, name: r.name, avatar: r.avatar } : { wallet: null, name: null, avatar: null }; });
@@ -86,6 +86,29 @@ export function buildApp(d: Deps) {
     await limit('attest', row.wallet, 40, 'The Church needs a rest. Try again tomorrow.'); await d.store.hit('attest', row.wallet);
     return { tx: await cosign(s, [ix.claimCampaign(row.wallet, s, id, oracle().address)]) };
   });
+  // ---------------------------------------------------------------- the AI hosts
+  const who = (v: unknown) => (v === 'nakamoto' ? 'nakamoto' : v === 'fortuna' ? 'fortuna' : null);
+  app.get('/agent/feed', async (q) => { const a = (q.query as any); return { decisions: d.hosts ? await d.hosts.feed(who(a.agent) ?? 'all', Number(a.limit) || 20) : [] }; });
+  app.get('/agent/decision/:id/proof', async (q) => { const r = d.hosts ? await d.hosts.proof(String((q.params as any).id).slice(0, 40)) : null; if (!r) throw new HttpError(404, 'not_found', 'No such decision.'); return r; });
+  app.post('/agent/ask', async (q) => {
+    const b = (q.body ?? {}) as any, agent = who(b.agent); if (!agent) throw new HttpError(400, 'bad_args', 'Ask Don Fortuna or Father Nakamoto.'); if (!d.hosts) throw new HttpError(503, 'resting', 'The hosts are resting.');
+    let id = `ip:${q.ip}`; try { const row = await d.store.byDid(did(q)); if (row) id = row.wallet; } catch { /* guests may ask too, within the IP limit */ }
+    return d.hosts.ask(agent, String(b.question ?? ''), id, q.ip);
+  });
+  /** the floor, as the Monitor and the Ledger show it */
+  let floor: { at: number; body: any } | null = null;
+  const floorNow = async () => {
+    if (floor && Date.now() - floor.at < 10_000) return floor.body;
+    const now = Date.now(), [h0, day, ps, decs] = await Promise.all([d.er.account(addr.house()), d.store.betStats(now - 86_400_000), d.store.wallets().then((w) => players(d.er, w)), d.store.decisions('nakamoto', 200)]);
+    const h = decodeHouse(h0!.data)!, on = presence(ps, now), c = (v: bigint) => Number(v / CHIP), sec = now / 1000;
+    const name = day.biggest ? (await d.store.byWallet(day.biggest.wallet))?.name ?? 'a player' : null, church = d.hosts?.church.since(now - 86_400_000) ?? { tithes: 0, candles: 0 };
+    const events = h.hosts.events.map((e, i) => ({ e, i })).filter(({ e }) => e.active && e.ends > sec).map(({ e, i }) => ({ kind: i ? 'vigil' : 'happy_hour', realm: i ? 'church' : 'casino', endsAt: e.ends * 1000, boostBps: i ? e.boostBps : 10_000, by: i ? 'nakamoto' : 'fortuna' }));
+    floor = { at: now, body: { events,
+      house: { playersOnline: on.online, inCasino: on.casino, inChurch: on.church, inPlaza: on.plaza, volume24h: Math.round(day.volume), houseNet24h: Math.round(day.houseNet), vault: c(h.vault), vaultFree: c(h.vault - h.reserved), jackpot: c(h.jackpot), maxBet: h.maxBetChips, luckPerChipMilli: h.hosts.luckPerChipMilli, edgeRealized24h: day.volume ? day.houseNet / day.volume : 0, edgeExpected: 0.045, biggestWin24h: day.biggest ? { name, chips: Math.round(day.biggest.payout), game: day.biggest.game } : null, timeouts24h: 0 },
+      church: { treasury: c(h.treasury), tithes24h: Math.round(church.tithes), candles24h: church.candles, alms24h: decs.filter((x) => x.applied && x.action === 'grant_alms' && x.at >= now - 86_400_000).reduce((n, x) => n + Number(x.params.chips ?? 0), 0), blessingsPaid24h: 0, blessingCapBps: h.hosts.blessingCapBps, candleFaithMilli: h.hosts.candleFaithMilli, faithfulOnline: on.church } } };
+    return floor.body;
+  };
+  app.get('/floor', async () => floorNow());
   /** names for wallets on screen (plot owners, campaign creators) */
   app.get('/who', async (q) => { const out: Record<string, string> = {}; for (const w of String((q.query as any).wallets ?? '').split(',').slice(0, 30)) { const r = w && await d.store.byWallet(w); if (r && r.name) out[w] = r.name; } return { names: out }; });
   /** who called what, with names. The rounds and their totals come from the chain itself */

@@ -19,7 +19,7 @@ export function howToHtml(): string {
   const e = (s: string) => s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!))
     .replace(/\bLUCK\b/g, '<b class="lk">LUCK</b>').replace(/\bFAITH\b/g, '<b class="fa">FAITH</b>');
   return `<ol class="howlist">${steps().map((s, i) => `<li data-i="${i}"><span class="hl-n">${i + 1}</span><span class="hl-t"><span class="hl-ghost">${e(s)}</span><span class="hl-live" data-html="${e(s).replace(/"/g, '&quot;')}"></span></span></li>`).join('')}</ol>
-    <p class="hl-foot">Chips are free play money on NEAR testnet.</p>`;
+    <p class="hl-foot">Chips are free play money on Solana devnet.</p>`;
 }
 
 /** Type the list out, one line after another. A tap or click on the list shows everything at once. */

@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs'; import os from 'node:os'; import path from 'node:path';
 import { b58decode, signerFrom, type Signer } from '@cnc/realm';
 
+// local secrets (gitignored): KEY=value lines, never printed
+for (const f of [new URL('../../.env.local', import.meta.url).pathname]) if (existsSync(f)) for (const l of readFileSync(f, 'utf8').split('\n')) { const m = /^([A-Z_][A-Z0-9_]*)=(.*)$/.exec(l.trim()); if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^"|"$/g, ''); }
 const env = process.env;
 /** a key from the environment (base58 or a JSON array). On a development machine: ~/.config/casino-mb/devnet/<file>.json */
 function key(name: string, file: string): Signer | null {
@@ -21,6 +23,10 @@ export const config = {
   keeper: key('KEEPER_KEY', 'keeper'),
   /** the Church oracle: co-signs campaigns it has read, and claims it has seen */
   oracle: key('ORACLE_KEY', 'oracle'),
+  /** the AI hosts' keys: each writes its decisions on L1 and acts on the rollup */
+  fortuna: key('FORTUNA_KEY', 'fortuna'),
+  nakamoto: key('NAKAMOTO_KEY', 'nakamoto'),
+  hosts: { nearaiKey: env.NEARAI_API_KEY ?? '', nearaiBase: (env.NEARAI_BASE_URL || 'https://cloud-api.near.ai/v1').replace(/\/$/, ''), nearaiModel: env.NEARAI_MODEL || 'Qwen/Qwen3.8-27B', nearaiDailyTokens: Number(env.NEARAI_DAILY_TOKEN_CAP ?? 150_000), chatShare: Number(env.NEARAI_CHAT_SHARE ?? 0.6), everyMin: Number(env.AGENT_EVERY_MIN ?? 10), askPerWalletHour: Number(env.ASK_PER_ACCOUNT_HOUR ?? 10), askPerIpHour: Number(env.ASK_PER_IP_HOUR ?? 60), disabled: env.AGENTS_DISABLED === '1' },
   databaseUrl: env.DATABASE_URL ?? '',
   faucetLamports: BigInt(env.FAUCET_LAMPORTS ?? 50_000_000),        // 0.05 SOL
   accountsTotal: Number(env.ACCOUNTS_TOTAL ?? 3000),

@@ -1,7 +1,7 @@
-import { addSignatures, addr, b64decode, b64encode, BJ, BJ_LABELS, buildTx, decodeBoard, decodeFeed, decodeMarket, decodePlots, hasClaimed, MARKET_HEAD, OUTCOMES, P, ChainError, CHIP, CHIPS_PER_SOL, compileMessage, GAME, GAME_NAMES, decodeHouse, decodePlayer, decodePurse, ix, REALM, Rpc, type BetResultState, type HandState, type Ix, type MarketState as ChainMarket, type PlayerState, type RoundRecState, type RoundState } from '@cnc/realm';
+import { addSignatures, addr, anchoredFromLogs, b64decode, b64encode, BJ, BJ_LABELS, buildTx, decodeBoard, decodeFeed, decodeMarket, decodePlots, hasClaimed, MARKET_HEAD, OUTCOMES, P, ChainError, CHIP, CHIPS_PER_SOL, compileMessage, GAME, GAME_NAMES, decodeHouse, decodePlayer, decodePurse, ix, REALM, Rpc, type BetResultState, type HandState, type Ix, type MarketState as ChainMarket, type PlayerState, type RoundRecState, type RoundState } from '@cnc/realm';
 import { cleanName, nameProblem, type NewCampaign } from '@cnc/shared';
 import { BackendError } from '../core/errors';
-import type { Backend, BetProof, BetReq, BetResult, BjState, CampaignRow, LbRow, MarketCrowdBet, MarketResult, MarketRound, MarketSide, MarketState, PastRound, WheelResult } from '../core/backend';
+import type { AgentDecision, AgentId, AgentProof, Backend, BetProof, BetReq, BetResult, BjState, CampaignRow, ChurchStats, HostCheck, HouseStats, LbRow, RealmEvent, MarketCrowdBet, MarketResult, MarketRound, MarketSide, MarketState, PastRound, WheelResult } from '../core/backend';
 import { bus } from '../core/bus';
 import { cardName, handTotal, MACHINE_SKINS, PARAMS, QUESTS, setTableBets, SLOT_SYMS } from '../core/rules';
 import { store, type HistRow, type Plot } from '../core/state';
@@ -245,6 +245,27 @@ export class SolanaBackend implements Backend {
     const known = new Set(chain.map((r) => r.epoch)); return [...chain, ...srv.rounds.filter((r) => !known.has(r.epoch))].sort((a, b) => b.epoch - a.epoch).slice(0, 60);
   }
   l1Url(sig: string) { return l1Tx(sig); }
+
+  // ---------------------------------------------------------------- the AI hosts
+  private floor: Promise<{ events: RealmEvent[]; house: HouseStats; church: ChurchStats }> | null = null; private floorAt = 0;
+  private readFloor() { if (!this.floor || Date.now() - this.floorAt > 8_000) { this.floorAt = Date.now(); this.floor = this.get<{ events: RealmEvent[]; house: HouseStats; church: ChurchStats }>('/floor'); this.floor.catch(() => { this.floor = null; }); } return this.floor; }
+  async activeEvents() { return (await this.readFloor().catch(() => ({ events: [] as RealmEvent[] }))).events; }
+  async houseStats() { return (await this.readFloor()).house; }
+  async churchStats() { return (await this.readFloor()).church; }
+  async agentFeed(agent: AgentId | 'all', limit = 20) { return (await this.get<{ decisions: AgentDecision[] }>(`/agent/feed?agent=${agent}&limit=${limit}`)).decisions; }
+  async agentProof(id: string): Promise<AgentProof> { const d = await this.get<AgentDecision>(`/agent/decision/${encodeURIComponent(id)}/proof`); if (!d.proof) throw new BackendError('unsigned', d.reason ?? 'That decision was not signed.'); return d.proof; }
+  async askHost(agent: AgentId, question: string) { return this.post<{ answer: string; relevant: boolean; proof?: AgentProof }>('/agent/ask', { agent, question }); }
+  /** reads the L1 record itself: the same hashes and signature as the bytes on screen, written before the action */
+  async checkAnchor(d: AgentDecision): Promise<HostCheck> {
+    const label = 'Written on Solana before it acted';
+    if (!d.anchorTx) return { label, ok: false, detail: 'no L1 record for this decision' };
+    const t = await this.l1.call('getTransaction', [d.anchorTx, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }]).catch(() => null);
+    const ev = t && anchoredFromLogs(t.meta?.logMessages ?? [], b64decode)[0]; if (!ev) return { label, ok: false, detail: 'the L1 record could not be read' };
+    const p = d.proof, hexOf = (u: Uint8Array) => [...u].map((x) => x.toString(16).padStart(2, '0')).join(''), sha = async (b64: string) => hexOf(new Uint8Array(await crypto.subtle.digest('SHA-256', b64decode(b64))));
+    const same = !p || ((await sha(p.requestB64)) === hexOf(ev.requestSha256) && (await sha(p.responseB64)) === hexOf(ev.responseSha256) && hexOf(ev.signature) === p.signature.replace(/^0x/, '').toLowerCase() && `0x${hexOf(ev.signingAddress)}` === p.signingAddress.toLowerCase());
+    const when = t.blockTime ? new Date(t.blockTime * 1000).toUTCString().slice(17, 25) : '';
+    return { label, ok: same && ev.action === d.action.slice(0, 24), detail: same ? `the same hashes and signature, on L1 at ${when} UTC; only then could the program act` : 'the L1 record differs from this decision' };
+  }
   verifyBet(p: BetProof) { return checkBet(this.er, this.need(), p); }
   txUrl(sig: string) { return erTx(sig); }
   async history(): Promise<HistRow[]> {

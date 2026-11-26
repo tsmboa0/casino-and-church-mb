@@ -1,5 +1,5 @@
 import { IDL } from './idl.ts';
-import { b58decode, b58encode, concat, i64, pda, sha256, str, u8, u32, u64, utf8 } from './bytes.ts';
+import { b58decode, b58encode, concat, i64, pda, sha256, str, u8, u16, u32, u64, utf8 } from './bytes.ts';
 import type { Ix } from './tx.ts';
 
 export const REALM = IDL.address as string;
@@ -11,14 +11,14 @@ export const P = {
 } as const;
 const k = (a: string) => b58decode(a);
 export const addr = {
-  config: () => pda(['config'], REALM), bank: () => pda(['bank'], REALM), housePurse: () => pda(['house_purse'], REALM), house: () => pda(['house'], REALM), market: () => pda(['market'], REALM), plots: () => pda(['plots'], REALM), board: (i: number) => pda(['board', u8(i)], REALM),
+  config: () => pda(['config'], REALM), bank: () => pda(['bank'], REALM), housePurse: () => pda(['house_purse'], REALM), house: () => pda(['house'], REALM), market: () => pda(['market'], REALM), plots: () => pda(['plots'], REALM), decisions: () => pda(['decisions'], REALM), board: (i: number) => pda(['board', u8(i)], REALM),
   /** nobody owns it: it only makes the L1 record of 60 rounds easy to find */
   roundsPage: (page: number) => pda(['rounds', u32(page)], REALM), marketCrank: (seed: Uint8Array) => pda(['crank', k(pda(['market'], REALM)), seed], P.hydra),
   purse: (w: string) => pda(['purse', k(w)], REALM), player: (w: string) => pda(['player', k(w)], REALM),
   sessionToken: (w: string, session: string) => pda(['session_token_v2', k(REALM), k(session), k(w)], P.session),
   programData: () => pda([k(REALM)], P.loader),
 };
-const fixed = (): Record<string, string> => ({ config: addr.config(), bank: addr.bank(), house_purse: addr.housePurse(), house: addr.house(), market: addr.market(), plots: addr.plots(), feed: P.btcFeed, instructions: P.instructions, hydra: P.hydra, ephemeral_vault: P.ephemeralVault, system_program: P.system, owner_program: REALM, delegation_program: P.delegation, magic_program: P.magic, magic_context: P.magicContext, program_id: REALM, program: REALM, program_data: addr.programData(), oracle_queue: P.vrfQueue, vrf_program: P.vrf, slot_hashes: P.slotHashes, program_identity: pda(['identity'], REALM) });
+const fixed = (): Record<string, string> => ({ config: addr.config(), bank: addr.bank(), house_purse: addr.housePurse(), house: addr.house(), market: addr.market(), plots: addr.plots(), decisions: addr.decisions(), feed: P.btcFeed, instructions: P.instructions, hydra: P.hydra, ephemeral_vault: P.ephemeralVault, system_program: P.system, owner_program: REALM, delegation_program: P.delegation, magic_program: P.magic, magic_context: P.magicContext, program_id: REALM, program: REALM, program_data: addr.programData(), oracle_queue: P.vrfQueue, vrf_program: P.vrf, slot_hashes: P.slotHashes, program_identity: pda(['identity'], REALM) });
 
 /** an instruction of our program. Accounts follow the IDL; the delegation helpers are derived from the account they serve. */
 export function realmIx(name: string, accounts: Record<string, string> = {}, args: Uint8Array = new Uint8Array()): Ix {
@@ -35,6 +35,35 @@ export function realmIx(name: string, accounts: Record<string, string> = {}, arg
       return { address, signer, writable };
     }),
   };
+}
+export type HostCallInput =
+  | { do: 'none' } | { do: 'set_max_bet'; chips: number } | { do: 'set_luck_rate'; milli: number } | { do: 'start_event'; kind: 0 | 1; minutes: number; boost_bps: number }
+  | { do: 'end_event'; kind: 0 | 1 } | { do: 'top_up_jackpot'; chips: number } | { do: 'grant_alms'; chips: number } | { do: 'set_blessing_cap'; bps: number } | { do: 'set_candle_faith'; milli: number };
+const callParts = (c: HostCallInput): [number, number, number, number] => {
+  switch (c.do) {
+    case 'none': return [0, 0, 0, 0]; case 'set_max_bet': return [1, c.chips, 0, 0]; case 'set_luck_rate': return [2, c.milli, 0, 0]; case 'start_event': return [3, c.kind, c.minutes, c.boost_bps];
+    case 'end_event': return [4, c.kind, 0, 0]; case 'top_up_jackpot': return [5, c.chips, 0, 0]; case 'grant_alms': return [6, c.chips, 0, 0]; case 'set_blessing_cap': return [7, c.bps, 0, 0]; case 'set_candle_faith': return [8, c.milli, 0, 0];
+  }
+};
+/** the instruction argument (Anchor's enum) */
+export const hostCallBytes = (c: HostCallInput) => { const [t, a, b, d] = callParts(c); return t === 0 ? u8(0) : t === 3 ? concat(u8(3), u8(a), u16(b), u32(d)) : t === 4 ? concat(u8(4), u8(a)) : concat(u8(t), u32(a)); };
+/** what the decision hash covers (onchain hosts.rs `Call::bytes`) */
+export const hostCallHashBytes = (c: HostCallInput) => { const [t, a, b, d] = callParts(c); return concat(u8(t), u32(a), u32(b), u32(d)); };
+/** sha256(id || agent || response sha256 || action): it is what L1 records and the rollup checks */
+export const decisionHash = (id: Uint8Array, agent: number, responseSha256: Uint8Array, c: HostCallInput) => sha256(concat(id, u8(agent), responseSha256, hostCallHashBytes(c)));
+/** tithes and candles, for the hosts' view of the church */
+export const churchFromLogs = (logs: string[], d64: (s: string) => Uint8Array) => [
+  ...events(logs, d64, 'Tithed', 44).map((r) => ({ kind: 'tithe' as const, wallet: r.key(), chips: Number(r.u64()) / 1e6 })),
+  ...events(logs, d64, 'CandleLit', 36).map((r) => ({ kind: 'candle' as const, wallet: r.key(), chips: 0 })),
+];
+export interface DecisionProofInput { id: Uint8Array; policy: number; action: string; model: string; signedText: string; signature: Uint8Array; signingAddress: Uint8Array; requestSha256: Uint8Array; responseSha256: Uint8Array }
+export interface DecisionAnchoredEvent extends DecisionProofInput { agent: number; hash: Uint8Array }
+export function anchoredFromLogs(logs: string[], d64: (s: string) => Uint8Array): DecisionAnchoredEvent[] {
+  const disc = IDL.events.DecisionAnchored as readonly number[], out: DecisionAnchoredEvent[] = [];
+  for (const l of logs) { if (!l.startsWith('Program data: ')) continue; let d: Uint8Array; try { d = d64(l.slice(14).trim()); } catch { continue; } if (!disc.every((b, i) => d[i] === b)) continue;
+    const r = new Reader(d), s = () => new TextDecoder().decode(r.raw(r.u32())); const agent = r.u8(), hash = r.raw(32), id = r.raw(16), policy = r.u8(), action = s(), model = s(), signedText = s();
+    out.push({ agent, hash, id, policy, action, model, signedText, signature: r.raw(65), signingAddress: r.raw(20), requestSha256: r.raw(32), responseSha256: r.raw(32) }); }
+  return out;
 }
 export interface CampaignInput { kind: number; title: string; url: string; machine_id: number; goal: number; reward_chips: number; reward_faith_milli: number; max_claims: number }
 const campaignBytes = (c: CampaignInput) => concat(u8(c.kind), str(c.title), str(c.url), u32(c.machine_id), u32(c.goal), u32(c.reward_chips), u32(c.reward_faith_milli), u32(c.max_claims));
@@ -87,6 +116,9 @@ export const ix = {
   closeCampaign: (w: string, signer: string, id: number) => realmIx('close_campaign', { signer, authority: w, board: addr.board(id >> 7), ...(signer === w ? {} : { session_token: addr.sessionToken(w, signer) }) }, u32(id)),
   /** anyone; `creator` unless the treasury paid for it */
   collectCampaign: (id: number, creator?: string) => realmIx('collect_campaign', { board: addr.board(id >> 7), ...(creator ? { player: addr.player(creator) } : {}) }, u32(id)),
+  // the hosts: written on L1 first, then acted on, once
+  anchorDecision: (host: string, agent: number, hash: Uint8Array, p: DecisionProofInput) => realmIx('anchor_decision', { host }, concat(u8(agent), hash, p.id, u8(p.policy), str(p.action), str(p.model), str(p.signedText), p.signature, p.signingAddress, p.requestSha256, p.responseSha256)),
+  hostAct: (host: string, agent: number, id: Uint8Array, responseSha256: Uint8Array, call: HostCallInput, player?: string) => realmIx('host_act', { host, ...(player ? { player: addr.player(player) } : {}) }, concat(u8(agent), id, responseSha256, hostCallBytes(call))),
   refundStale: (w: string) => realmIx('refund_stale', { authority: w, player: addr.player(w) }),
   /** SessionTokenV2: the wallet, the session key and whoever pays all sign. No SOL goes to the session key. */
   createSession: (w: string, session: string, feePayer: string, validUntil: number): Ix => ({
@@ -133,13 +165,19 @@ export interface PurseState { owner: string; deposited: bigint; paidOut: bigint;
 export function decodePurse(d: Uint8Array): PurseState | null { if (d.length < 60 || !has(d, 'Purse')) return null; const r = new Reader(d); return { owner: r.key(), deposited: r.u64(), paidOut: r.u64(), lastDepositTs: r.i64() }; }
 export interface BankState { totalDeposited: bigint; totalPaid: bigint }
 export function decodeBank(d: Uint8Array): BankState | null { if (!has(d, 'Bank')) return null; const r = new Reader(d); return { totalDeposited: r.u64(), totalPaid: r.u64() }; }
-export interface HouseState { vault: bigint; reserved: bigint; treasury: bigint; jackpot: bigint; machineTotal: bigint; escrowTotal: bigint; chipsOutstanding: bigint; totalCredited: bigint; totalWithdrawn: bigint; welcomePaid: bigint; maxBetChips: number; welcomeChips: number; allowedWagers: number[]; totalPlayers: bigint; paused: boolean }
+/** a Happy Hour (0) or Vigil (1); `boostBps`: a Vigil's FAITH boost (a Happy Hour doubles blessings) */
+export interface EventState { started: number; ends: number; boostBps: number; active: boolean }
+export interface HouseHosts { events: EventState[]; lastEventStart: number[]; eventsDay: number; eventsToday: number[]; almsDay: number; almsBase: bigint; almsSpent: bigint; topupDay: number; topupSpent: bigint; lastAgentChange: number; lastPriestChange: number; luckPerChipMilli: number; blessingCapBps: number; candleFaithMilli: number; bonusOutstanding: bigint }
+export interface HouseState { vault: bigint; reserved: bigint; treasury: bigint; jackpot: bigint; machineTotal: bigint; escrowTotal: bigint; chipsOutstanding: bigint; totalCredited: bigint; totalWithdrawn: bigint; welcomePaid: bigint; maxBetChips: number; welcomeChips: number; allowedWagers: number[]; totalPlayers: bigint; paused: boolean; hosts: HouseHosts }
 export function decodeHouse(d: Uint8Array): HouseState | null {
   if (!has(d, 'House')) return null; const r = new Reader(d);
   const vault = r.u64(), reserved = r.u64(), treasury = r.u64(), jackpot = r.u64(), machineTotal = r.u64(); r.u64(); const escrowTotal = r.u64(), chipsOutstanding = r.u64(); r.skip(24); const totalCredited = r.u64(), totalWithdrawn = r.u64(), welcomePaid = r.u64();
   r.skip(40); r.skip(2 * 24 + 16 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 16 * 32 + 8); const p0 = r.o; const par = (i: number) => { const n = r.v.getUint32(p0 + 4 * i, true); return n; };
   const allowedWagers: number[] = []; for (let i = 0; i < 8; i++) if (par(18 + i)) allowedWagers.push(par(18 + i)); r.o = p0 + 26 * 4; const totalPlayers = r.u64(), paused = r.u8() !== 0;
-  return { vault, reserved, treasury, jackpot, machineTotal, escrowTotal, chipsOutstanding, totalCredited, totalWithdrawn, welcomePaid, maxBetChips: par(9), welcomeChips: par(8), allowedWagers, totalPlayers, paused };
+  const v = r.v, i64at = (o: number) => Number(v.getBigInt64(o, true)), u64at = (o: number) => v.getBigUint64(o, true);
+  const events = [160, 184].map((o) => ({ started: i64at(o), ends: i64at(o + 8), boostBps: v.getUint32(o + 16, true), active: v.getUint32(o + 20, true) !== 0 }));
+  const hosts: HouseHosts = { events, lastEventStart: [i64at(208), i64at(216)], eventsDay: i64at(224), eventsToday: [v.getUint32(232, true), v.getUint32(236, true)], almsDay: i64at(240), almsBase: u64at(248), almsSpent: u64at(256), topupDay: i64at(264), topupSpent: u64at(272), lastAgentChange: i64at(280), lastPriestChange: i64at(288), luckPerChipMilli: par(0), blessingCapBps: par(12), candleFaithMilli: par(16), bonusOutstanding: d.length >= 944 ? u64at(936) : 0n };
+  return { vault, reserved, treasury, jackpot, machineTotal, escrowTotal, chipsOutstanding, totalCredited, totalWithdrawn, welcomePaid, maxBetChips: par(9), welcomeChips: par(8), allowedWagers, totalPlayers, paused, hosts };
 }
 // ---------------------------------------------------------------- the BTC market
 export const OUTCOMES = ['expired', 'up', 'down', 'tie', 'void'] as const;

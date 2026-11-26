@@ -21,6 +21,7 @@ pub mod church;
 pub mod constants;
 pub mod error;
 pub mod games;
+pub mod hosts;
 pub mod machines;
 pub mod market;
 pub mod money;
@@ -272,6 +273,24 @@ pub mod realm {
     }
     pub fn delegate_board(ctx: Context<DelegateBoard>, index: u8) -> Result<()> {
         ctx.accounts.delegate_board(&ctx.accounts.payer, &[SEED_BOARD, &[index]], DelegateConfig { validator: Some(ctx.accounts.config.er_validator), ..Default::default() })?;
+        Ok(())
+    }
+
+    // ================================================================ L1: the hosts' decisions
+
+    pub fn init_decisions(ctx: Context<InitDecisions>) -> Result<()> {
+        ctx.accounts.decisions.load_init()?.bump = ctx.bumps.decisions;
+        Ok(())
+    }
+    /// A host writes down a decision before it may act on it. The model's signed proof travels in this transaction, so it
+    /// stays in Solana's history; the log keeps the last 64 hashes for the rollup to check.
+    pub fn anchor_decision(ctx: Context<AnchorDecision>, agent: u8, hash: [u8; 32], proof: DecisionProof) -> Result<()> {
+        let a = &ctx.accounts;
+        let key = if agent == hosts::FORTUNA { a.config.fortuna } else if agent == hosts::NAKAMOTO { a.config.nakamoto } else { return err!(RealmError::BadArgs) };
+        require_keys_eq!(a.host.key(), key, RealmError::NotAllowed);
+        require!(proof.model.len() <= 80 && proof.signed_text.len() <= 300 && proof.action.len() <= 24, RealmError::BadArgs);
+        hosts::anchor(&mut *a.decisions.load_mut()?, agent, hash, Clock::get()?.unix_timestamp);
+        emit!(DecisionAnchored { agent, hash, proof });
         Ok(())
     }
 
@@ -853,6 +872,26 @@ pub mod realm {
         Ok(())
     }
 
+    // ================================================================ rollup: the hosts act
+
+    /// Only a decision this host anchored on L1 in the last half hour, for exactly this action, and only once.
+    pub fn host_act(ctx: Context<HostAct>, agent: u8, id: [u8; 16], response_sha256: [u8; 32], call: HostCall) -> Result<()> {
+        let a = &ctx.accounts;
+        let key = if agent == hosts::FORTUNA { a.config.fortuna } else if agent == hosts::NAKAMOTO { a.config.nakamoto } else { return err!(RealmError::BadArgs) };
+        require_keys_eq!(a.host.key(), key, RealmError::NotAllowed);
+        let now = Clock::get()?.unix_timestamp;
+        let call = call.into_call();
+        let hash = hosts::decision_hash(&id, agent, &response_sha256, &call);
+        let mut h = a.house.load_mut()?;
+        ch(hosts::admit(&mut h, &*a.decisions.load()?, agent, hash, now))?;
+        let alms = match &a.player {
+            Some(l) => { let mut p = l.load_mut()?; let got = ch(hosts::act(&mut h, agent, call, Some(&mut p), now))?; (got > 0).then_some((p.authority, got)) }
+            None => { ch(hosts::act(&mut h, agent, call, None, now))?; None }
+        };
+        emit!(HostActed { agent, hash, call: call.bytes(), wallet: alms.map(|a| a.0).unwrap_or_default(), lamports: alms.map(|a| a.1).unwrap_or(0) });
+        Ok(())
+    }
+
     // ================================================================ rollup: the player's own things
 
     pub fn set_profile(ctx: Context<Play>, name: String, avatar: String) -> Result<()> {
@@ -1065,6 +1104,53 @@ pub struct BetPlaced { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick:
 pub struct BetSettled { pub wallet: Pubkey, pub seq: u64, pub game: u8, pub pick: u8, pub wager: u64, pub payout: u64, pub blessing: u64, pub luck_gain_milli: u32, pub outcome: [u8; 4], pub jackpot: bool, pub randomness: [u8; 32] }
 #[event]
 pub struct HandStep { pub wallet: Pubkey, pub seq: u64, pub step: u8, pub action: u8, pub player: [u8; 12], pub n_player: u8, pub dealer: [u8; 12], pub n_dealer: u8, pub randomness: [u8; 32] }
+/// What the model signed, and how to check it: sha256 of the exact request and response bytes, and the enclave's
+/// EIP-191 signature over "<model>:<request sha256>:<response sha256>". `policy` 0: the model; 1: the rule fallback (unsigned).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct DecisionProof {
+    pub id: [u8; 16],
+    pub policy: u8,
+    pub action: String,
+    pub model: String,
+    pub signed_text: String,
+    pub signature: [u8; 65],
+    pub signing_address: [u8; 20],
+    pub request_sha256: [u8; 32],
+    pub response_sha256: [u8; 32],
+}
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy)]
+pub enum HostCall {
+    None,
+    SetMaxBet { chips: u32 },
+    SetLuckRate { milli: u32 },
+    StartEvent { kind: u8, minutes: u16, boost_bps: u32 },
+    EndEvent { kind: u8 },
+    TopUpJackpot { chips: u32 },
+    GrantAlms { chips: u32 },
+    SetBlessingCap { bps: u32 },
+    SetCandleFaith { milli: u32 },
+}
+impl HostCall {
+    fn into_call(self) -> hosts::Call {
+        use hosts::Call as C;
+        match self {
+            HostCall::None => C::None,
+            HostCall::SetMaxBet { chips } => C::SetMaxBet(chips),
+            HostCall::SetLuckRate { milli } => C::SetLuckRate(milli),
+            HostCall::StartEvent { kind, minutes, boost_bps } => C::StartEvent(kind, minutes, boost_bps),
+            HostCall::EndEvent { kind } => C::EndEvent(kind),
+            HostCall::TopUpJackpot { chips } => C::TopUpJackpot(chips),
+            HostCall::GrantAlms { chips } => C::GrantAlms(chips),
+            HostCall::SetBlessingCap { bps } => C::SetBlessingCap(bps),
+            HostCall::SetCandleFaith { milli } => C::SetCandleFaith(milli),
+        }
+    }
+}
+#[event]
+pub struct DecisionAnchored { pub agent: u8, pub hash: [u8; 32], pub proof: DecisionProof }
+#[event]
+pub struct HostActed { pub agent: u8, pub hash: [u8; 32], pub call: Vec<u8>, pub wallet: Pubkey, pub lamports: u64 }
+
 #[derive(AnchorSerialize, AnchorDeserialize)]
 pub struct CampaignArgs {
     pub kind: u8,
@@ -1693,6 +1779,42 @@ pub struct CollectCampaign<'info> {
     #[account(mut, seeds = [SEED_BOARD, &[board.load()?.index]], bump)]
     pub board: AccountLoader<'info, Board>,
     /// the creator's, unless the treasury paid. Its authority is checked against the campaign
+    #[account(mut)]
+    pub player: Option<AccountLoader<'info, Player>>,
+}
+
+#[derive(Accounts)]
+pub struct InitDecisions<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump, has_one = admin @ RealmError::NotAllowed)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(init, payer = admin, space = DecisionLog::SPACE, seeds = [SEED_DECISIONS], bump)]
+    pub decisions: AccountLoader<'info, DecisionLog>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AnchorDecision<'info> {
+    #[account(mut)]
+    pub host: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(mut, seeds = [SEED_DECISIONS], bump)]
+    pub decisions: AccountLoader<'info, DecisionLog>,
+}
+
+/// The decision log is on L1 and never delegated: the rollup reads its copy.
+#[derive(Accounts)]
+pub struct HostAct<'info> {
+    pub host: Signer<'info>,
+    #[account(seeds = [SEED_CONFIG], bump = config.bump)]
+    pub config: Box<Account<'info, Config>>,
+    #[account(mut, seeds = [SEED_HOUSE], bump)]
+    pub house: AccountLoader<'info, House>,
+    #[account(seeds = [SEED_DECISIONS], bump)]
+    pub decisions: AccountLoader<'info, DecisionLog>,
+    /// for alms
     #[account(mut)]
     pub player: Option<AccountLoader<'info, Player>>,
 }

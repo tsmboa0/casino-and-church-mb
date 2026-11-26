@@ -1,4 +1,4 @@
-import { addr, b64decode, decodeMarket, decodePlayer, GAME_NAMES, marketBetsFromLogs, marketSettledFromLogs, OUTCOMES, REALM, roundsFromLogs, settledFromLogs, type MarketSettledEvent, type Rpc, type SettledEvent } from '@cnc/realm';
+import { addr, b64decode, churchFromLogs, decodeMarket, decodePlayer, GAME_NAMES, marketBetsFromLogs, marketSettledFromLogs, OUTCOMES, REALM, roundsFromLogs, settledFromLogs, type MarketSettledEvent, type Rpc, type SettledEvent } from '@cnc/realm';
 import { toRound } from './market.ts';
 import type { BetRow, SolStore } from './store.ts';
 
@@ -29,6 +29,8 @@ export const marketRow = (e: MarketSettledEvent, tx: string, at: number): BetRow
 export class Indexer {
   status = { connected: false, seen: 0, rounds: 0, lastAt: 0, reconnects: 0, backfilled: 0 };
   private ws: WebSocket | null = null; private on = false; private done = new Set<string>(); private heard = 0; private filling = false;
+  /** tithes and candles as they happen (the hosts watch the church with it) */
+  onChurch: (kind: 'tithe' | 'candle', chips: number, at: number) => void = () => {};
   constructor(private er: Rpc, private store: SolStore) {}
   start() { this.on = true; this.connect(); setInterval(() => void this.backfill(), 60_000).unref(); setInterval(() => { if (this.status.connected && Date.now() - this.heard > 45_000) this.ws?.close(); }, 15_000).unref(); }
   private connect() {
@@ -44,6 +46,7 @@ export class Indexer {
     for (const e of settledFromLogs(logs, b64decode)) { await this.store.addBet(toRow(e, sig, at)); saw(); }
     for (const e of marketBetsFromLogs(logs, b64decode)) await this.store.addCall({ wallet: e.wallet, seq: String(e.seq), epoch: Number(e.epoch), side: e.side === 1 ? 'up' : 'down', chips: Number(e.wager) / 1e6 });
     for (const e of marketSettledFromLogs(logs, b64decode)) { await this.store.addBet(marketRow(e, sig, at)); saw(); }
+    for (const e of churchFromLogs(logs, b64decode)) this.onChurch(e.kind, e.chips, at);
     for (const e of roundsFromLogs(logs, b64decode)) { await this.store.addRound(toRound(e, sig)); this.status.rounds++; }
   }
   private async tx(sig: string, blockTime: number | null) { const t = await this.er.call('getTransaction', [sig, { encoding: 'json', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }]); if (t?.meta) await this.take(sig, t.meta.logMessages, (blockTime ?? Date.now() / 1000) * 1000); }

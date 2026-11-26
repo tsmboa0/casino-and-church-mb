@@ -18,6 +18,7 @@ pub const SEED_HOUSE: &[u8] = b"house";
 pub const SEED_PLAYER: &[u8] = b"player";
 pub const SEED_MARKET: &[u8] = b"market";
 pub const SEED_PLOTS: &[u8] = b"plots";
+pub const SEED_DECISIONS: &[u8] = b"decisions";
 pub const SEED_BOARD: &[u8] = b"board";
 /// an address nobody owns, one per 60 rounds: it only makes the record of those rounds easy to find
 pub const SEED_ROUNDS: &[u8] = b"rounds";

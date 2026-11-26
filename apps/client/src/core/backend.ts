@@ -44,9 +44,11 @@ export interface CampaignRow {
   free?: boolean; refund?: number;
 }
 export interface AgentProof { model: string; chatId: string; signedText: string; signature: string; signingAddress: string;
-  signatureKind: 'provider_tee' | 'gateway'; requestB64: string; responseB64: string; attestedSigner: string; attestationAt: number; txHash?: string }
+  signatureKind: 'provider_tee' | 'gateway'; requestB64: string; responseB64: string; attestedSigner: string; attestationAt: number; txHash?: string; /** Solana: the L1 record */ anchorTx?: string }
 export interface AgentDecision { id: string; agent: AgentId; at: number; action: string; params: Record<string, number | string>;
-  line: string; applied: boolean; reason?: string; txHash?: string; proof?: AgentProof; policy?: 'llm' | 'rules' }
+  line: string; applied: boolean; reason?: string; txHash?: string; anchorTx?: string; proof?: AgentProof; policy?: 'llm' | 'rules' }
+/** one line of a verification, checked in the browser */
+export interface HostCheck { label: string; ok: boolean; detail: string }
 export interface RealmEvent { kind: 'happy_hour' | 'vigil'; realm: 'casino' | 'church'; endsAt: number; boostBps: number; by: AgentId }
 export interface HouseStats { playersOnline: number; inCasino: number; inChurch: number; inPlaza: number; volume24h: number; houseNet24h: number;
   vault: number; vaultFree: number; jackpot: number; maxBet: number; luckPerChipMilli: number; edgeRealized24h: number; edgeExpected: number;
@@ -123,6 +125,10 @@ export interface Backend {
   agentProof?(id: string): Promise<AgentProof>;
   activeEvents?(): Promise<RealmEvent[]>;
   houseStats?(): Promise<HouseStats>;
+  /** OPTIONAL (Solana): the decision was written on L1, with this proof, before it acted */
+  checkAnchor?(d: AgentDecision): Promise<HostCheck>;
+  /** link to an L1 transaction */
+  l1Url?(sig: string): string;
   churchStats?(): Promise<ChurchStats>;
   /** OPTIONAL: relayed set_profile / complete_tour (the client calls them fire-and-forget) */
   setProfile?(name: string, avatar: string): Promise<void>;
@@ -166,8 +172,7 @@ export interface Backend {
   marketBet?(epoch: number, side: MarketSide, chips: number): Promise<{ betId: number; tx?: string }>;
   /** finished rounds, newest first; `before` an epoch for older ones */
   pastRounds?(before?: number): Promise<PastRound[]>;
-  /** link to an L1 transaction */
-  l1Url?(sig: string): string;
+
   /** a settled market bet, or null while its round is still running */
   marketResult?(betId: number): Promise<MarketResult | null>;
 }

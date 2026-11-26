@@ -47,7 +47,7 @@ export function mountHud(avatarSheet: (id: string) => string) {
   let events: RealmEvent[] = [];
   const paintEvents = () => {
     const now = Date.now(); events = events.filter(e => e.endsAt > now);
-    pills.innerHTML = events.map(e => { const s = Math.ceil((e.endsAt - now) / 1000); return `<button class="evpill ${e.kind}" title="${e.kind === 'happy_hour' ? 'LUCK' : 'FAITH'} +${e.boostBps / 100}%">${e.kind === 'happy_hour' ? 'HAPPY HOUR' : 'VIGIL'} <b>+${e.boostBps / 100}%</b> <i>${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}</i></button>`; }).join('');
+    pills.innerHTML = events.map(e => { const s = Math.ceil((e.endsAt - now) / 1000); return `<button class="evpill ${e.kind}" title="${e.kind === 'happy_hour' ? 'Blessings on Casino wins are doubled' : `FAITH +${e.boostBps / 100}%`}">${e.kind === 'happy_hour' ? 'HAPPY HOUR' : 'VIGIL'} <b>${e.kind === 'happy_hour' ? '&times;2' : `+${e.boostBps / 100}%`}</b> <i>${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}</i></button>`; }).join('');
     document.body.classList.toggle('ev-happy', events.some(e => e.kind === 'happy_hour'));
     document.body.classList.toggle('ev-vigil', events.some(e => e.kind === 'vigil'));
   };
@@ -85,7 +85,7 @@ const PANEL_COPY: Record<PanelKind, { t: string; body: string; tag: string }> = 
   slots: { t: 'Slots', tag: 'PHASE 2', body: 'Three reels, dealt on-chain by Don Fortuna\'s wallet. Every spin builds LUCK.' },
   coinflip: { t: 'Coin Flip Pit', tag: 'PHASE 2', body: 'Heads or tails. Provably fair commit-reveal, settled in seconds.' },
   wheel: { t: 'Wheel of Fortune', tag: 'PHASE 3', body: 'Fill your LUCK to 100 and the wheel is yours to spin.' },
-  cashier: { t: 'Cashier Cage', tag: 'PHASE 2', body: 'Deposit test NEAR for chips. Withdraw whenever you like.' },
+  cashier: { t: 'Cashier Cage', tag: 'PHASE 2', body: 'Buy chips with devnet SOL. Cash out whenever you like.' },
   plot: { t: "Founders' Plot", tag: 'PHASE 4', body: 'Earn your standing, mint a deed, and own a machine on the floor.' },
   altar: { t: 'Altar of Fortune', tag: 'PHASE 3', body: 'Offer your LUCK and it becomes FAITH. Both burning bright brings Harmony.' },
   offering: { t: 'Offering Box', tag: 'PHASE 2', body: 'Tithe chips to grow FAITH. A share of every wager ends up here.' },
