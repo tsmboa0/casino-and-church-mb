@@ -782,98 +782,174 @@ const KIND_DO = ['FOLLOW', 'VISIT', 'PLAY'];
 /** "5d 3h", "2h 10m", "9m" */
 const left = (s: number) => { if (s <= 0) return 'ended'; const d = Math.floor(s / 86_400), h = Math.floor((s % 86_400) / 3_600), m = Math.ceil((s % 3_600) / 60); return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`; };
 const reward = (r: CampaignRow) => [r.rewardChips ? `${fmt(r.rewardChips)} ${r.free ? 'bonus ' : ''}chip${r.rewardChips === 1 ? '' : 's'}` : '', r.rewardFaith ? `${r.rewardFaith} FAITH` : ''].filter(Boolean).join(' + ');
-/** a banner, or a drawn one in the colours of its kind when there is none */
-const bannerHtml = (r: { banner?: string | null; kind: number; project?: string; title: string }) => r.banner
-  ? `<div class="qp-banner"><img src="${esc(r.banner)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('ph');this.remove()"></div>`
-  : `<div class="qp-banner ph k${r.kind}"><b>${esc((r.project || r.title).trim().charAt(0).toUpperCase())}</b></div>`;
-/** one campaign as a page of the book; also the Commission Desk's preview */
-function campaignPage(r: CampaignRow, preview = false): string {
-  const now = Date.now() / 1000, ends = r.endsAt ?? 0, over = !r.active || (ends > 0 && now >= ends), spots = Math.max(0, r.maxClaims - r.claims), machine = r.kind === 2;
-  const stamp = r.claimed ? '<i class="qp-stamp ok">CLAIMED</i>' : over ? '<i class="qp-stamp">ENDED</i>' : '';
-  const steps = r.steps?.length ? r.steps : machine ? [`Go to machine #${r.machineId} on Founders' Row`, `Play it ${r.goal} time${r.goal === 1 ? '' : 's'}`, 'Come back and claim'] : [r.kind === 0 ? 'Open the link and do the task' : 'Open the link and look around', 'Come back after a moment', 'Claim: Father Nakamoto signs it'];
-  const act = preview ? `<button class="qp-do" disabled>${KIND_DO[r.kind]}</button><button class="qp-claim" disabled>CLAIM</button>`
-    : r.mine ? (r.active ? `<button class="qp-do dark" data-close="${r.id}">CLOSE IT<small>the rest comes back</small></button>` : r.refund ? `<button class="qp-do" data-close="${r.id}">COLLECT<small>${fmt(r.refund)} chips</small></button>` : '<button class="qp-do" disabled>CLOSED</button>')
-    : r.claimed || over ? '' : machine ? `<button class="qp-do" data-machine="${r.machineId}">GO TO THE MACHINE<small>${Math.min(r.progress, r.goal)} of ${r.goal} played</small></button><button class="qp-claim" data-claim="${r.id}" ${r.progress >= r.goal ? '' : 'disabled'}>CLAIM</button>`
-    : `<button class="qp-do" data-go="${r.id}">${KIND_DO[r.kind]}<small>${esc(hostOf(r.url))}</small></button><button class="qp-claim" data-claim="${r.id}" disabled>CLAIM<small>do the task first</small></button>`;
-  return `<article class="qp k${r.kind} ${over ? 'over' : ''}" data-page="${r.id}">${stamp}
-    ${bannerHtml(r)}
-    <div class="qp-head"><span class="ktag k${r.kind}">${KIND_TAG[r.kind]}</span><small>${r.mine && !preview ? 'YOUR CAMPAIGN' : `by ${esc(r.project || (r.free ? 'the Church' : 'a player'))}`}</small></div>
-    <h3>${esc(r.title)}</h3>
-    <div class="qp-reward"><small>YOU GET</small><b>${reward(r) || '&mdash;'}</b><em>${r.rewardChips ? (r.free ? 'bonus chips: for playing; what they win is yours' : 'real chips: yours to keep or cash out') : 'FAITH grows your blessings'}</em></div>
-    <div class="qp-meta"><span><b>${spots}</b> of ${r.maxClaims} spot${r.maxClaims === 1 ? '' : 's'} left</span><span>${ends ? (over ? 'ENDED' : `ends in <b>${left(ends - now)}</b>`) : 'no end date'}</span></div>
-    ${r.description ? `<p class="qp-desc">${esc(r.description)}</p>` : ''}
-    <ol class="qp-steps">${steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>
-    <div class="qp-act">${act}</div></article>`;
-}
 const hostOf = (u: string) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+/** the house banners: the Casino and the Church as they look in the game (not in the repo; a drawn banner stands in) */
+const HOUSE_BANNER = { casino: `${import.meta.env.BASE_URL}assets/vendor-built/banners/casino.jpg`, church: `${import.meta.env.BASE_URL}assets/vendor-built/banners/church.jpg` };
+/** a banner, or a drawn one in the colours of its kind when there is none (or it does not load) */
+const bannerHtml = (r: { banner?: string | null; kind: number | string; project?: string; title: string }, tag = '') => {
+  const ph = `<b>${esc((r.project || r.title).trim().charAt(0).toUpperCase())}</b>`;
+  return r.banner
+    ? `<div class="qp-banner k${r.kind}"><img src="${esc(r.banner)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('ph');this.outerHTML='${ph.replace(/'/g, '&#39;')}'">${tag}</div>`
+    : `<div class="qp-banner ph k${r.kind}">${ph}${tag}</div>`;
+};
+
+/** one page of the Quest Board. Every page has the same parts in the same places, house quest or campaign */
+interface QPage {
+  banner?: string | null; kind: number | string; tag: string; tagKind?: string; by: string; title: string; project?: string;
+  reward: string; note: string; spots: string; ends: string; desc?: string; steps: string[]; progress?: [number, number];
+  act: string; stamp?: '' | 'CLAIMED' | 'ENDED'; over?: boolean; id?: string;
+}
+function pageHtml(p: QPage): string {
+  return `<article class="qp ${p.over ? 'over' : ''}" ${p.id ? `data-page="${p.id}"` : ''}>${p.stamp ? `<i class="qp-stamp ${p.stamp === 'CLAIMED' ? 'ok' : ''}">${p.stamp}</i>` : ''}
+    ${bannerHtml({ banner: p.banner, kind: p.kind, project: p.project, title: p.title }, `<span class="qp-tag k${p.tagKind ?? p.kind}">${p.tag}</span>`)}
+    <div class="qp-body">
+      <small class="qp-by" data-pv="project">${esc(p.by)}</small>
+      <h3 data-pv="title">${esc(p.title)}</h3>
+      <div class="qp-reward"><small>EACH PLAYER GETS</small><b>${p.reward || '&mdash;'}</b><em>${p.note}</em><div class="qp-meta"><span>${p.spots}</span><span>${p.ends}</span></div></div>
+      ${p.desc ? `<p class="qp-desc" data-pv="description">${esc(p.desc)}</p>` : ''}
+      <div class="qp-sec">WHAT TO DO</div>
+      <ol class="qp-steps" data-pv="steps">${p.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>
+      ${p.progress ? `<div class="qp-prog"><div class="qbar"><i style="width:${Math.min(100, (p.progress[0] / p.progress[1]) * 100)}%"></i></div><span>${fmt(Math.min(p.progress[0], p.progress[1]))} of ${fmt(p.progress[1])}</span></div>` : ''}
+    </div>
+    <div class="qp-act">${p.act}</div></article>`;
+}
+/** a campaign as a page; also the Commission Desk's preview. `ready`: seconds until its claim opens (after a visit) */
+function campaignPage(r: CampaignRow, preview = false, ready?: number): string {
+  const now = Date.now() / 1000, ends = r.endsAt ?? 0, over = !r.active || (ends > 0 && now >= ends), spots = Math.max(0, r.maxClaims - r.claims), machine = r.kind === 2;
+  const steps = r.steps?.length ? r.steps : machine ? [`Go to machine #${r.machineId} on Founders' Row`, `Spin it ${r.goal} time${r.goal === 1 ? '' : 's'}`, 'Come back to this page and claim'] : [r.kind === 0 ? 'Open the link and do the task' : 'Open the link and look around', 'Come back after a moment', 'Claim: Father Nakamoto signs it'];
+  const claim = ready == null ? `<button class="qp-claim" data-claim="${r.id}" disabled>CLAIM<small>do the task first</small></button>`
+    : ready > 0 ? `<button class="qp-claim" data-claim="${r.id}" disabled>CLAIM<small>in ${ready}s</small></button>` : `<button class="qp-claim ready" data-claim="${r.id}">CLAIM<small>the Father signs</small></button>`;
+  const act = preview ? `<button class="qp-do" disabled>${machine ? 'GO TO THE MACHINE' : KIND_DO[r.kind]}</button><button class="qp-claim" disabled>CLAIM</button>`
+    : r.mine ? (r.active ? `<button class="qp-do dark" data-close="${r.id}">CLOSE IT<small>what is left comes back</small></button>` : r.refund ? `<button class="qp-do" data-close="${r.id}">COLLECT<small>${fmt(r.refund)} chips</small></button>` : '<button class="qp-do" disabled>CLOSED</button>')
+    : r.claimed || over ? '' : machine ? `<button class="qp-do" data-machine="${r.machineId}">GO TO THE MACHINE</button><button class="qp-claim ${r.progress >= r.goal ? 'ready' : ''}" data-claim="${r.id}" ${r.progress >= r.goal ? '' : 'disabled'}>CLAIM<small>${Math.min(r.progress, r.goal)} of ${r.goal} spins</small></button>`
+    : `<button class="qp-do" data-go="${r.id}">${KIND_DO[r.kind]}<small>${esc(hostOf(r.url))}</small></button>${claim}`;
+  return pageHtml({
+    id: `c${r.id}`, banner: r.banner ?? (r.free ? HOUSE_BANNER.church : null), kind: r.kind, tag: r.free ? 'THE CHURCH' : KIND_TAG[r.kind], tagKind: r.free ? 'church' : undefined, project: r.project, title: r.title,
+    by: r.mine && !preview ? 'your campaign' : `by ${r.project || (r.free ? 'the Church' : 'a player')}`,
+    reward: reward(r), note: r.rewardChips ? (r.free ? 'bonus chips: play them, and what they win is yours' : 'real chips: yours to keep or cash out') : 'FAITH adds a blessing to your wins',
+    spots: `<b>${spots}</b> of ${r.maxClaims} spot${r.maxClaims === 1 ? '' : 's'} left`, ends: ends ? (over ? 'ENDED' : `ends in <b>${left(ends - now)}</b>`) : 'no end date',
+    desc: r.description, steps, progress: machine && !preview && !r.mine ? [r.progress, r.goal] : undefined, act, over, stamp: r.claimed ? 'CLAIMED' : over ? 'ENDED' : '',
+  });
+}
+/** the house's own quests: each one a page like any campaign, under the banner of the realm it sends you to */
+const HOUSE_QUEST: Record<string, { realm: 'casino' | 'church'; place: string; go: string; where: string; desc: string }> = {
+  'q-spin': { realm: 'casino', place: 'slots-west', go: 'GO TO THE SLOTS', where: 'Walk to the Slots in the Casino', desc: 'The slots are the loudest corner of the Casino. Pull the lever three times and the house pays you back.' },
+  'q-flip': { realm: 'casino', place: 'coinflip', go: 'GO TO THE COIN FLIP', where: 'Walk to the Coin Flip pit in the Casino', desc: 'The simplest bet on the floor: heads or tails. Flip once to learn the pit.' },
+  'q-tithe': { realm: 'church', place: 'offering', go: 'GO TO THE OFFERING BOX', where: 'Walk to the Offering Box in the Church', desc: 'Give 50 chips at the Offering Box in the Church. Father Nakamoto remembers the generous.' },
+  'q-candle': { realm: 'church', place: 'candles', go: 'GO TO THE CANDLES', where: 'Walk to the Votive Candles in the Church', desc: 'Light two votive candles in the Church. Each flame is a small prayer, and the house returns a little LUCK.' },
+  'q-altar': { realm: 'church', place: 'altar', go: 'GO TO THE ALTAR', where: 'Walk to the Altar in the Church', desc: 'At the Altar, offer 20 LUCK and receive FAITH. The Church rewards the convert.' },
+};
+function questPage(q: (typeof QUESTS)[number]): string {
+  const h = HOUSE_QUEST[q.id] ?? { realm: 'church' as const, place: '', go: 'GO', where: '', desc: '' };
+  const v = Math.min(q.goal, store.stats[q.counter] ?? 0), claimed = !!store.stats.claimed[q.id], open = v >= q.goal && !claimed;
+  const note = q.reward.chips ? 'bonus chips: play them, and what they win is yours' : q.reward.faith ? 'FAITH adds a blessing to your wins' : 'LUCK fills toward the Wheel of Fortune';
+  return pageHtml({
+    id: q.id, banner: HOUSE_BANNER[h.realm], kind: h.realm, tag: h.realm === 'casino' ? 'THE CASINO' : 'THE CHURCH', by: h.realm === 'casino' ? 'by Don Fortuna' : 'by Father Nakamoto',
+    title: q.title, reward: q.rewardText.replace(/^\+/, ''), note, spots: 'once per player', ends: 'no end date', desc: h.desc,
+    steps: [h.where, q.desc, 'Come back to this page and claim'],
+    progress: [v, q.goal], over: claimed, stamp: claimed ? 'CLAIMED' : '',
+    act: claimed ? '' : `<button class="qp-do" data-goto="${h.place}">${h.go}</button><button class="qp-claim ${open ? 'ready' : ''}" data-q="${q.id}" ${open ? '' : 'disabled'}>CLAIM<small>${open ? 'it is yours' : `${fmt(v)} of ${fmt(q.goal)} done`}</small></button>`,
+  });
+}
 
 function missions(root: Root, close: () => void) {
   shell(root, close, 'church', 'QUEST BOARD', `
     <div class="qb">
-      <div class="qb-book" id="book" tabindex="0" aria-label="The Quest Board, a book: swipe or use the arrows to turn pages"><div class="qb-page l" id="pl"></div><div class="qb-spine"></div><div class="qb-page r" id="pr"></div></div>
+      <div class="qb-book" id="book" tabindex="0" aria-label="The Quest Board, a book: swipe a page or use the arrows to turn it">
+        <div class="qb-page l" id="pl"></div><div class="qb-spine"></div><div class="qb-page r" id="pr"></div></div>
       <div class="qb-nav"><button class="qb-turn" id="prev" aria-label="Previous page">&#9664;</button><span id="pgno"></span><button class="qb-turn" id="next" aria-label="Next page">&#9654;</button></div>
     </div>`);
-  const book = $(root, '#book'), timers: number[] = [];
-  let pages: string[] = [], rows: CampaignRow[] = [], at = 0;
+  const book = $(root, '#book'), pl = $(root, '#pl'), pr = $(root, '#pr');
+  let pages: (() => string)[] = [], rows: CampaignRow[] = [], at = 0, turning = false, alive = true;
+  /** campaigns a player has visited: when their claim opens (ms) */
+  const visits = new Map<number, number>();
   const two = () => book.clientWidth >= 540;
-  // the built-in quests: the book's first page
-  const questPage = () => `<article class="qp quests"><div class="qp-banner ph church"><b>&#10013;</b></div><div class="qp-head"><span class="ktag">THE CHURCH</span><small>for every wanderer</small></div><h3>The Church's Quests</h3>
-    <div class="qq">${QUESTS.map(q => { const v = Math.min(q.goal, store.stats[q.counter]), claimed = !!store.stats.claimed[q.id], open = v >= q.goal && !claimed;
-      return `<div class="qq-row ${claimed ? 'done' : open ? 'ready' : ''}"><div><b>${q.title}</b><small>${q.desc}</small><div class="qbar"><i style="width:${(v / q.goal) * 100}%"></i></div></div><button data-q="${q.id}" ${open ? '' : 'disabled'}>${claimed ? '&#10003;' : open ? 'CLAIM' : `${Math.floor(v)}/${q.goal}`}<small>${q.rewardText}</small></button></div>`; }).join('')}</div></article>`;
   const blank = (t: string) => `<article class="qp blank"><p>${t}</p></article>`;
+  const folio = (i: number) => (i < pages.length ? `<span class="qb-folio">${i + 1}</span>` : '');
+  const html = (i: number) => (i < pages.length ? pages[i]() : blank('&#10022;<br><br>The end of the book.<br>New campaigns are written in at the Commission Desk.')) + folio(i);
   const build = () => {
     const now = Date.now() / 1000, live = (r: CampaignRow) => r.active && !(r.endsAt && now >= r.endsAt) && !r.claimed;
-    const order = [...rows.filter(r => live(r) && !r.mine), ...rows.filter(r => r.mine), ...rows.filter(r => !live(r) && !r.mine)];
-    pages = [questPage(), ...order.map(r => campaignPage(r))];
-    if (pages.length === 1) pages.push(blank('No campaigns on the board yet.<br><br>Projects and players commission them at the Commission Desk in the Scriptorium.'));
+    const ready = (id: number) => { const t = visits.get(id); return t == null ? undefined : Math.max(0, Math.ceil((t - Date.now()) / 1000)); };
+    const camp = (r: CampaignRow) => () => campaignPage(r, false, ready(r.id));
+    const quest = (q: (typeof QUESTS)[number]) => () => questPage(q), done = (q: (typeof QUESTS)[number]) => !!store.stats.claimed[q.id];
+    pages = [...QUESTS.filter(q => !done(q)).map(quest), ...rows.filter(r => live(r) && !r.mine).map(camp), ...rows.filter(r => r.mine).map(camp),
+      ...QUESTS.filter(done).map(quest), ...rows.filter(r => !live(r) && !r.mine).map(camp)];
   };
-  const show = (dir = 0) => {
-    const n = two() ? 2 : 1; at = Math.max(0, Math.min(at, pages.length - 1)); if (n === 2) at -= at % 2;
-    $(root, '#pl').innerHTML = pages[at] ?? ''; $(root, '#pr').innerHTML = n === 2 ? (pages[at + 1] ?? blank('&mdash; the end &mdash;')) : '';
-    book.classList.toggle('one', n === 1);
+  const nav = () => {
+    const n = two() ? 2 : 1;
     $(root, '#pgno').textContent = n === 2 ? `PAGES ${at + 1}-${Math.min(at + 2, pages.length)} OF ${pages.length}` : `PAGE ${at + 1} OF ${pages.length}`;
     ($(root, '#prev') as HTMLButtonElement).disabled = at === 0; ($(root, '#next') as HTMLButtonElement).disabled = at + n >= pages.length;
-    if (dir) { book.classList.remove('turn-next', 'turn-prev'); void book.offsetWidth; book.classList.add(dir > 0 ? 'turn-next' : 'turn-prev'); audio.play('hit', 0.2); }
-    wire();
   };
-  const turn = (d: number) => { const n = two() ? 2 : 1, to = at + d * n; if (to < 0 || to >= pages.length) return; at = to; show(d); };
+  const show = () => {
+    const n = two() ? 2 : 1; at = Math.max(0, Math.min(at, pages.length - 1)); if (n === 2) at -= at % 2;
+    book.classList.toggle('one', n === 1); pl.innerHTML = html(at); pr.innerHTML = n === 2 ? html(at + 1) : ''; nav();
+  };
+  /** a page turns like the backstory's: a leaf lifts off one side and lands on the other, the next pages beneath it */
+  const turn = (d: number) => {
+    const n = two() ? 2 : 1, to = at + d * n; if (turning || to < 0 || to >= pages.length) return;
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches; audio.play('hit', 0.2); vib(4);
+    if (reduce) { at = to; show(); return; }
+    turning = true; const ms = 720, leaf = document.createElement('div'), from = n === 1 ? pl : d > 0 ? pr : pl;
+    leaf.className = `qb-leaf ${d > 0 || n === 1 ? 'fwd' : 'back'}${n === 1 && d < 0 ? ' land' : ''}`; leaf.style.setProperty('--turn', `${ms}ms`);
+    leaf.style.cssText += `;left:${from.offsetLeft}px;top:${from.offsetTop}px;width:${from.offsetWidth}px;height:${from.offsetHeight}px`;
+    const face = (side: 'l' | 'r', inner: string, cls: string) => `<div class="qb-page ${side} qb-face ${cls}">${inner}</div>`;
+    if (n === 2 && d > 0) { leaf.innerHTML = face('r', pr.innerHTML, 'front') + face('l', html(to), 'rear'); pr.innerHTML = html(to + 1); }
+    else if (n === 2) { leaf.innerHTML = face('l', pl.innerHTML, 'front') + face('r', html(to + 1), 'rear'); pl.innerHTML = html(to); }
+    else if (d > 0) { leaf.innerHTML = face('l', pl.innerHTML, 'front') + face('l', '', 'rear'); pl.innerHTML = html(to); }
+    else { leaf.innerHTML = face('l', html(to), 'front') + face('l', '', 'rear'); }
+    leaf.querySelectorAll('button').forEach(b => (b.tabIndex = -1));
+    book.append(leaf); at = to; nav();
+    window.setTimeout(() => {
+      if (n === 2 && d > 0) pl.innerHTML = html(at); else if (n === 2) pr.innerHTML = html(at + 1); else pl.innerHTML = html(at);
+      leaf.remove(); turning = false;
+    }, ms);
+  };
   $(root, '#prev').addEventListener('click', () => turn(-1)); $(root, '#next').addEventListener('click', () => turn(1));
-  book.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft') turn(-1); if (e.key === 'ArrowRight') turn(1); });
-  // a swipe on either page turns it
-  let sx = 0, sy = 0, st = 0;
-  book.addEventListener('pointerdown', (e) => { sx = e.clientX; sy = e.clientY; st = Date.now(); });
-  book.addEventListener('pointerup', (e) => { const dx = e.clientX - sx, dy = e.clientY - sy; if (Date.now() - st < 700 && Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.4) turn(dx < 0 ? 1 : -1); });
-  window.addEventListener('resize', () => { if (root.isConnected) show(); });
+  book.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft') { e.preventDefault(); turn(-1); } if (e.key === 'ArrowRight') { e.preventDefault(); turn(1); } });
+  // a swipe on either page turns it: right to left for the next pages, left to right to go back
+  let sx = 0, sy = 0, st = 0, down = false;
+  book.addEventListener('pointerdown', (e) => { down = true; sx = e.clientX; sy = e.clientY; st = Date.now(); });
+  book.addEventListener('pointerup', (e) => { if (!down) return; down = false; const dx = e.clientX - sx, dy = e.clientY - sy; if (Date.now() - st < 800 && Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.3) turn(dx < 0 ? 1 : -1); });
+  book.addEventListener('pointercancel', () => { down = false; });
+  const onResize = () => { if (!root.isConnected) return window.removeEventListener('resize', onResize); if (!turning) show(); };
+  window.addEventListener('resize', onResize);
   const load = async () => {
     try { rows = backend.campaigns ? await backend.campaigns() : []; } catch (e) { rows = []; bus.emit('toast', errText(e)); }
-    build(); show();
+    if (!alive) return; build(); if (!turning) show();
   };
-  const wire = () => {
-    $$(book, '[data-q]').forEach(b => b.addEventListener('click', async () => {
-      const q = QUESTS.find(x => x.id === b.dataset.q)!; if ((b as HTMLButtonElement).disabled) return;
-      try { await pending(b, () => backend.claimQuest(q.id)); setBal(root); build(); show(); showResult(root, 'win', 'QUEST COMPLETE', q.rewardText, q.title + (q.reward.chips ? '. Play them: what they win is yours.' : '')); } catch (e) { oops(root, e); }
-    }));
-    $$(book, '[data-go]').forEach(b => b.addEventListener('click', async () => {
-      const id = +b.dataset.go!, row = rows.find(r => r.id === id)!;
+  /** redraw only the open pages (a claim, a countdown), never the whole book */
+  const refresh = () => { build(); if (!turning) { const n = two() ? 2 : 1; pl.innerHTML = html(at); if (n === 2) pr.innerHTML = html(at + 1); nav(); } };
+  const tick = window.setInterval(() => {
+    if (!root.isConnected || !root.querySelector('.qb')) { alive = false; clearInterval(tick); return; }
+    if ([...visits.values()].some(t => t > Date.now() - 1500)) refresh();
+  }, 1000);
+  // one listener for the whole book: pages are redrawn, the listener stays
+  book.addEventListener('click', async (ev) => {
+    const b = (ev.target as HTMLElement).closest<HTMLButtonElement>('button'); if (!b || b.disabled || b.closest('.qb-leaf')) return;
+    if (b.dataset.goto) { const place = b.dataset.goto; close(); window.setTimeout(() => (window as any).cnc?.go(place), 250); return; }
+    if (b.dataset.q) {
+      const q = QUESTS.find(x => x.id === b.dataset.q)!;
+      try { await pending(b, () => backend.claimQuest(q.id)); setBal(root); refresh(); showResult(root, 'win', 'QUEST COMPLETE', q.rewardText, q.title + (q.reward.chips ? '. Play them: what they win is yours.' : '')); } catch (e) { oops(root, e); }
+      return;
+    }
+    if (b.dataset.go) {
+      const id = +b.dataset.go, row = rows.find(r => r.id === id)!;
       if (!confirm(`This opens a page outside the game:\n${row.url}\n\nThe Church checked the link, but never sign anything there.`)) return;
       window.open(row.url, '_blank', 'noopener');
-      try {
-        const { visitS } = await pending(b, () => backend.startCampaign!(id));
-        const cb = book.querySelector<HTMLButtonElement>(`[data-claim="${id}"]`); if (!cb) return; let s = visitS;
-        const t = window.setInterval(() => { if (!cb.isConnected) return clearInterval(t); s--; if (s > 0) { cb.innerHTML = `CLAIM<small>in ${s}s</small>`; return; } clearInterval(t); cb.disabled = false; cb.innerHTML = 'CLAIM<small>the Father signs</small>'; cb.classList.add('ready'); }, 1000);
-        timers.push(t); cb.innerHTML = `CLAIM<small>in ${s}s</small>`;
-      } catch (e) { oops(root, e); }
-    }));
-    $$(book, '[data-machine]').forEach(b => b.addEventListener('click', () => { const plot = Object.entries(store.plots).find(([, p]) => p.id === +b.dataset.machine!)?.[0]; close(); if (plot) window.setTimeout(() => (window as any).cnc?.go(`plot-${plot}`), 250); }));
-    $$(book, '[data-claim]').forEach(b => b.addEventListener('click', async () => {
-      if ((b as HTMLButtonElement).disabled) return; const id = +b.dataset.claim!;
-      try { const r = await pending(b, () => backend.claimCampaign!(id)); setBal(root); showResult(root, 'win', 'BLESSED', [r.chips ? `+${r.chips}` : '', r.faith ? `+${r.faith} FAITH` : ''].filter(Boolean).join(' '), 'Campaign complete'); await load(); } catch (e) { oops(root, e); }
-    }));
-    $$(book, '[data-close]').forEach(b => b.addEventListener('click', async () => {
+      try { const { visitS } = await pending(b, () => backend.startCampaign!(id)); visits.set(id, Date.now() + visitS * 1000); refresh(); } catch (e) { oops(root, e); }
+      return;
+    }
+    if (b.dataset.machine) { const plot = Object.entries(store.plots).find(([, p]) => p.id === +b.dataset.machine!)?.[0]; close(); if (plot) window.setTimeout(() => (window as any).cnc?.go(`plot-${plot}`), 250); return; }
+    if (b.dataset.claim) {
+      const id = +b.dataset.claim;
+      try { const r = await pending(b, () => backend.claimCampaign!(id)); visits.delete(id); setBal(root); showResult(root, 'win', 'BLESSED', [r.chips ? `+${r.chips}` : '', r.faith ? `+${r.faith} FAITH` : ''].filter(Boolean).join(' '), 'Campaign complete'); await load(); } catch (e) { oops(root, e); }
+      return;
+    }
+    if (b.dataset.close) {
       if (!confirm('Close this campaign? What is left of its budget comes back to you.')) return;
       try { await pending(b, () => backend.closeCampaign!(+b.dataset.close!)); setBal(root); await load(); } catch (e) { oops(root, e); }
-    }));
-  };
+    }
+  });
   build(); show(); void load();
 }
 
@@ -1173,51 +1249,69 @@ function commission(root: Root, close: () => void) {
       <div class="cd-pane" id="cpane"></div>
     </div>`);
   const pane = $(root, '#cpane'), L = CAMPAIGN_LIMITS;
-  let tab = 'new', kind = 0, banner: string | null = null;
+  let tab = 'new', kind = 0, banner: string | null = null, steps: string[] = [''];
   const form = async () => {
     const owner = await myOwnerId(); if (tab !== 'new') return;
     const machines = Object.values(store.plots).filter(p => p.mine ?? p.owner === owner);
     pane.innerHTML = `<form class="cd-grid" id="cf" novalidate>
       <div class="cd-form">
         <section><h4><i>1</i>WHAT KIND OF CAMPAIGN</h4><div class="cd-kinds">${KINDS.map((k, i) => `<button type="button" class="cd-kind ${i === kind ? 'on' : ''}" data-k="${i}" ${i === 2 && !machines.length ? 'disabled' : ''}><b>${k.t}</b><span>${k.d}</span><em>locks at least ${fmt(CAMPAIGN_MIN_BUDGET[i])} chips (${CAMPAIGN_MIN_BUDGET[i] / 1000} SOL)</em>${i === 2 && !machines.length ? '<em class="no">you need a machine on Founders’ Row</em>' : ''}</button>`).join('')}</div></section>
-        <section><h4><i>2</i>THE PROJECT</h4>
-          <label class="cd-f"><span>PROJECT NAME</span><input id="pn" maxlength="${DETAIL_LIMITS.project}" placeholder="Your project, or your name" autocomplete="off"></label>
-          <label class="cd-drop" id="drop"><input type="file" id="bf" accept="image/png,image/jpeg,image/webp,image/gif" hidden><span id="dropt"><b>ADD A BANNER</b><small>Click or drop an image. 1200 &times; 450 looks best. PNG, JPEG, WebP or GIF, up to 1.5 MB.</small></span></label>
-          <label class="cd-f"><span>DESCRIPTION <em id="dc"></em></span><textarea id="pd" maxlength="${DETAIL_LIMITS.description}" rows="3" placeholder="What is it, and why should players care?"></textarea></label>
-          <label class="cd-f" id="urow"><span>LINK</span><input id="cu" maxlength="160" placeholder="https://x.com/yourproject" autocomplete="off"></label></section>
-        <section><h4><i>3</i>THE TASK</h4>
-          <label class="cd-f"><span>TITLE: WHAT PLAYERS DO</span><input id="ct" maxlength="60" placeholder="Follow us on X" autocomplete="off"></label>
-          <div class="cd-f" id="mrow" hidden><span>MACHINE AND SPINS</span><div class="cd-two"><select id="cm">${machines.map(m => `<option value="${m.id}">#${m.id} ${esc(m.name)}</option>`).join('')}</select><input id="cg" type="number" min="1" max="50" value="5" aria-label="Spins"></div></div>
-          <div class="cd-f"><span>STEPS (OPTIONAL)</span>${[0, 1, 2, 3].map(i => `<input class="cd-step" maxlength="${DETAIL_LIMITS.step}" placeholder="${['Open our page', 'Follow the account', 'Come back here', ''][i] ? `${i + 1}. ${['Open our page', 'Follow the account', 'Come back here', ''][i]}` : `${i + 1}.`}" autocomplete="off">`).join('')}</div></section>
+        <section><h4><i>2</i>THE CAMPAIGN PAGE</h4>
+          <label class="cd-f"><span>CAMPAIGN TITLE <small>the headline of your page</small></span><input id="ct" data-pv-for="title" maxlength="60" placeholder="Follow Orbit Labs on X" autocomplete="off"></label>
+          <label class="cd-f"><span>PROJECT NAME <small>shown as &ldquo;by &hellip;&rdquo; above the title</small></span><input id="pn" data-pv-for="project" maxlength="${DETAIL_LIMITS.project}" placeholder="Orbit Labs" autocomplete="off"></label>
+          <label class="cd-drop" id="drop"><input type="file" id="bf" accept="image/png,image/jpeg,image/webp,image/gif" hidden><span id="dropt"><b>ADD A BANNER</b><small>Optional. Click or drop an image: 1600 &times; 600 looks best. PNG, JPEG, WebP or GIF, up to 1.5 MB.</small></span></label>
+          <label class="cd-f"><span>DESCRIPTION <small>what it is, and why players should care</small><em id="dc"></em></span><textarea id="pd" data-pv-for="description" maxlength="${DETAIL_LIMITS.description}" rows="3" placeholder="A Solana wallet that makes sending money as easy as a text message."></textarea></label></section>
+        <section><h4><i>3</i>WHAT PLAYERS DO</h4>
+          <label class="cd-f" id="urow"><span>LINK <small>the button on your page opens it</small></span><input id="cu" maxlength="160" placeholder="https://x.com/orbitlabs" autocomplete="off"></label>
+          <div id="mrow" hidden>
+            <label class="cd-f"><span>YOUR MACHINE <small>players go to it on Founders&rsquo; Row</small></span><select id="cm">${machines.map(m => `<option value="${m.id}">#${m.id} ${esc(m.name)}</option>`).join('')}</select></label>
+            <label class="cd-f"><span>SPINS NEEDED <small>each player spins it this many times, then claims</small></span><input id="cg" type="number" min="1" max="50" value="5"></label></div>
+          <div class="cd-f"><span>STEPS <small>optional, up to ${DETAIL_LIMITS.steps}; without them the page shows simple ones</small></span><ol class="cd-steps" id="steps" data-pv-for="steps"></ol>
+            <button type="button" class="g-key dark cd-add" id="addstep">+ ADD A STEP</button></div></section>
         <section><h4><i>4</i>REWARDS AND LENGTH</h4>
           <div class="cd-nums"><label><span>CHIPS EACH</span><input id="cc" type="number" min="0" max="${L.maxRewardChips}" value="25"></label><label><span>FAITH EACH</span><input id="cfa" type="number" min="0" max="5" step="0.5" value="2"></label><label><span>PLAYERS</span><input id="cn" type="number" min="1" max="${L.maxClaims}" value="40"></label></div>
           <label class="cd-f"><span>RUNS FOR <b id="dv"></b></span><input id="cdays" type="range" min="1" max="30" value="7"></label>
           <p class="cd-small">When it ends, or when you close it, what was not won comes back to you.</p></section>
+        <section><h4><i>5</i>WHAT IT COSTS</h4><div class="cd-fund" id="fund"></div></section>
       </div>
       <aside class="cd-side"><div class="g-lab">HOW PLAYERS WILL SEE IT</div><div class="cd-preview" id="pv"></div>
-        <div class="cd-fund" id="fund"></div><button class="g-go gold wide" type="submit" id="send"><span>LOCK AND PUBLISH</span></button></aside>
+        <p class="cd-why" id="why"></p><button class="g-go gold wide" type="submit" id="send"><span>LOCK AND PUBLISH</span></button></aside>
     </form>`;
     const v = (id: string) => ($(pane, id) as HTMLInputElement).value;
     const draft = (): NewCampaign => ({ kind, title: v('#ct').trim(), url: kind === 2 ? '' : v('#cu').trim(), machine_id: kind === 2 ? +v('#cm') : 0, goal: kind === 2 ? +v('#cg') : 0,
       reward_chips: Math.max(0, Math.floor(+v('#cc') || 0)), reward_faith_milli: Math.round((+v('#cfa') || 0) * 1000), max_claims: Math.max(1, Math.floor(+v('#cn') || 1)), days: +v('#cdays') });
-    const details = (): CampaignDetails => ({ project: v('#pn').trim(), description: v('#pd').trim(), steps: $$(pane, '.cd-step').map(i => (i as HTMLInputElement).value.trim()).filter(Boolean), banner });
+    const details = (): CampaignDetails => ({ project: v('#pn').trim(), description: v('#pd').trim(), steps: steps.map(s => s.trim()).filter(Boolean), banner });
+    // the steps: one box to start, ADD A STEP for more (up to the limit), and × to take one out
+    const drawSteps = (focus = -1) => {
+      $(pane, '#steps').innerHTML = steps.map((s, i) => `<li><input class="cd-step" data-i="${i}" maxlength="${DETAIL_LIMITS.step}" value="${esc(s)}" placeholder="${['Open our page on X', 'Tap Follow', 'Come back here and claim', 'Turn on notifications', 'Share a post'][i] ?? ''}" autocomplete="off">${steps.length > 1 ? `<button type="button" class="cd-x" data-x="${i}" aria-label="Remove step ${i + 1}">&times;</button>` : ''}</li>`).join('');
+      ($(pane, '#addstep') as HTMLButtonElement).disabled = steps.length >= DETAIL_LIMITS.steps; $(pane, '#addstep').textContent = steps.length >= DETAIL_LIMITS.steps ? `${DETAIL_LIMITS.steps} STEPS IS THE MOST` : '+ ADD A STEP';
+      if (focus >= 0) pane.querySelector<HTMLInputElement>(`.cd-step[data-i="${focus}"]`)?.focus();
+    };
+    $(pane, '#steps').addEventListener('input', (e) => { const el = e.target as HTMLInputElement; if (el.dataset.i) { steps[+el.dataset.i] = el.value; check(); } });
+    $(pane, '#steps').addEventListener('click', (e) => { const x = (e.target as HTMLElement).closest<HTMLElement>('[data-x]'); if (!x) return; steps.splice(+x.dataset.x!, 1); drawSteps(Math.min(+x.dataset.x!, steps.length - 1)); check(); });
+    $(pane, '#addstep').addEventListener('click', () => { if (steps.length >= DETAIL_LIMITS.steps) return; steps.push(''); drawSteps(steps.length - 1); check(); });
+    // the field being typed in lights up its part of the preview
+    pane.addEventListener('focusin', (e) => { const f = (e.target as HTMLElement).closest<HTMLElement>('[data-pv-for]')?.dataset.pvFor ?? ''; pane.dataset.focus = f; hilite(); });
+    pane.addEventListener('focusout', () => { pane.dataset.focus = ''; hilite(); });
+    const hilite = () => { let hit: HTMLElement | null = null; $$(pane, '#pv [data-pv]').forEach(el => { const on = !!pane.dataset.focus && el.dataset.pv === pane.dataset.focus; el.classList.toggle('pv-hl', on); if (on) hit = el; });
+      const body = pane.querySelector<HTMLElement>('#pv .qp-body'); if (hit && body) body.scrollTop = Math.max(0, (hit as HTMLElement).offsetTop - 44); };
     const check = () => {
       const d = draft(), dt = details(), c = campaignCost(d), min = CAMPAIGN_MIN_BUDGET[kind];
       const problem = campaignProblem(d) ?? (dt.project || dt.description ? detailsProblem(dt) : 'Name your project and describe it.');
       const enough = c.budget >= min, chipsOk = store.eco.chips >= c.total, machineOk = kind !== 2 || machines.length > 0;
       $(pane, '#dv').textContent = `${d.days} DAY${d.days === 1 ? '' : 'S'}`; $(pane, '#dc').textContent = `${dt.description.length}/${DETAIL_LIMITS.description}`;
       const row: CampaignRow = { id: 0, kind, creator: owner, title: d.title || 'Your campaign title', url: d.url || 'https://example.com', machineId: d.machine_id, goal: d.goal, rewardChips: d.reward_chips, rewardFaith: d.reward_faith_milli / 1000, maxClaims: d.max_claims, claims: 0, active: true, claimed: false, progress: 0, mine: false,
-        project: dt.project || 'Your project', description: dt.description || 'Your description appears here.', steps: dt.steps, banner, endsAt: Date.now() / 1000 + d.days! * 86_400 };
-      $(pane, '#pv').innerHTML = campaignPage(row, true);
+        project: dt.project || 'your project', description: dt.description || 'Your description appears here.', steps: dt.steps, banner, endsAt: Date.now() / 1000 + d.days! * 86_400 };
+      $(pane, '#pv').innerHTML = `<div class="qb-page cd-page">${campaignPage(row, true)}</div>`; hilite();
       const pct = Math.min(100, (c.budget / min) * 100);
       $(pane, '#fund').innerHTML = `<div class="cd-line"><span>Rewards locked</span><b>${fmt(c.budget)}</b></div><div class="cd-min ${enough ? 'ok' : ''}"><i style="width:${pct}%"></i><small>${enough ? `above the ${fmt(min)} minimum` : `${fmt(min - c.budget)} more to reach the ${fmt(min)} minimum`}</small></div>
         <div class="cd-line"><span>Listing (10% to the Church)</span><b>${fmt(c.listing)}</b></div><div class="cd-line total"><span>YOU PAY</span><b>${fmt(c.total)} chips &middot; ${(c.total / 1000).toFixed(3)} SOL</b></div>
-        <div class="cd-line ${chipsOk ? '' : 'bad'}"><span>Your chips</span><b>${fmt(store.eco.chips)}</b></div>
-        ${problem ? `<p class="cd-why">${esc(problem)}</p>` : !enough ? `<p class="cd-why">Raise the chips each or the number of players.</p>` : !chipsOk ? '<p class="cd-why">Buy chips at the Cashier first. Bonus chips cannot fund a campaign.</p>' : '<p class="cd-ok">Ready. Father Nakamoto reads it, then it goes up on the Quest Board.</p>'}`;
+        <div class="cd-line ${chipsOk ? '' : 'bad'}"><span>Your chips</span><b>${fmt(store.eco.chips)}</b></div>`;
+      $(pane, '#why').outerHTML = `${problem ? `<p class="cd-why" id="why">${esc(problem)}</p>` : !enough ? `<p class="cd-why" id="why">Raise the chips each or the number of players to reach the minimum.</p>` : !chipsOk ? '<p class="cd-why" id="why">Buy chips at the Cashier first. Bonus chips cannot fund a campaign.</p>' : '<p class="cd-ok" id="why">Ready. Father Nakamoto reads it, then it goes up on the Quest Board.</p>'}`;
       const send = $<HTMLButtonElement>(pane, '#send'); send.disabled = !!problem || !enough || !chipsOk || !machineOk; $(send, 'span').textContent = `LOCK ${fmt(c.total)} CHIPS AND PUBLISH`;
     };
     $$(pane, '[data-k]').forEach(b => b.addEventListener('click', () => { if ((b as HTMLButtonElement).disabled) return; kind = +b.dataset.k!; $$(pane, '[data-k]').forEach(x => x.classList.toggle('on', x === b)); ($(pane, '#urow') as HTMLElement).hidden = kind === 2; ($(pane, '#mrow') as HTMLElement).hidden = kind !== 2; audio.play('hit', 0.25); check(); }));
-    pane.querySelectorAll('input, select, textarea').forEach(i => i.addEventListener('input', check));
+    pane.querySelectorAll('input:not(.cd-step), select, textarea').forEach(i => i.addEventListener('input', check)); drawSteps();
     const take = async (f?: File | null) => { if (!f) return; try { banner = await bannerData(f); $(pane, '#dropt').innerHTML = `<img src="${banner}" alt=""><small>Click to change</small>`; check(); } catch (e) { oops(root, e); } };
     $(pane, '#bf').addEventListener('change', (e) => void take((e.target as HTMLInputElement).files?.[0]));
     const drop = $(pane, '#drop'); drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); }); drop.addEventListener('dragleave', () => drop.classList.remove('over'));
@@ -1228,7 +1322,7 @@ function commission(root: Root, close: () => void) {
       const veil = document.createElement('div'); veil.className = 'cm-veil';
       veil.innerHTML = `<div class="ch-face"><div class="spr idle" style="${spriteCss('m_monk', 'idle_down', 4)}"></div></div><b>FATHER NAKAMOTO</b><span>is reading your campaign&hellip;</span><i class="mk-spin"></i>`;
       root.querySelector('.gm')!.append(veil);
-      try { const [id] = await Promise.all([backend.createCampaign!(d, details()), sleep(1800)]); veil.remove(); setBal(root); banner = null; showResult(root, 'win', 'PUBLISHED', `#${id}`, 'The Father blessed it. It is on the Quest Board now.'); switchTab('mine'); }
+      try { const [id] = await Promise.all([backend.createCampaign!(d, details()), sleep(1800)]); veil.remove(); setBal(root); banner = null; steps = ['']; showResult(root, 'win', 'PUBLISHED', `#${id}`, 'The Father blessed it. It is on the Quest Board now.'); switchTab('mine'); }
       catch (err) { veil.remove(); showResult(root, 'push', 'THE FATHER REFUSED', '', errText(err)); }
     });
   };
@@ -1272,6 +1366,24 @@ bus.on('marketSettled', (r: MarketResult) => {
   const head = r.outcome === 'void' || r.outcome === 'tie' ? 'BTC round: bet returned' : r.payout > 0 ? `BTC ${r.outcome.toUpperCase()}! You won ${r.payout % 1 ? r.payout.toFixed(1) : r.payout} chips` : `BTC ${r.outcome.toUpperCase()}: your ${r.side.toUpperCase()} call lost`;
   bus.emit('toast', head);
 });
+
+/**
+ * Brings `a` in line with `b` without rebuilding it: same elements, new text and classes. A card that only changed its
+ * numbers keeps its nodes, so nothing slides, flickers or loses focus. Clocks and the chip row are filled elsewhere.
+ */
+function morph(a: Element, b: Element) {
+  for (const { name, value } of [...b.attributes]) if (a.getAttribute(name) !== value && !(name === 'style' && a.hasAttribute('data-ring'))) a.setAttribute(name, value);
+  for (const { name } of [...a.attributes]) if (!b.hasAttribute(name) && !(name === 'data-w' && a.id === 'chipwrap')) a.removeAttribute(name);
+  if (a.hasAttribute('data-clk') || (a.id === 'chipwrap' && b.id === 'chipwrap' && a.hasAttribute('data-w'))) return;
+  const an = [...a.childNodes], bn = [...b.childNodes];
+  if (an.length !== bn.length) { a.replaceChildren(...bn.map(n => n.cloneNode(true))); return; }
+  an.forEach((n, i) => {
+    const m = bn[i];
+    if (n.nodeType !== m.nodeType || n.nodeName !== m.nodeName) n.replaceWith(m.cloneNode(true));
+    else if (n.nodeType === Node.TEXT_NODE) { if (n.nodeValue !== m.nodeValue) n.nodeValue = m.nodeValue; }
+    else if (n.nodeType === Node.ELEMENT_NODE) morph(n as Element, m as Element);
+  });
+}
 
 /** TradingView's Advanced Chart widget: BTC/USDT, 1-minute candles, dark, no toolbars (the panel is small) */
 function mountTradingView(host: HTMLElement) {
@@ -1331,7 +1443,7 @@ function market(root: Root, close: () => void) {
       <div class="mx-px"><small>BTC / USD${tv ? ' &middot; THE ORACLE' : ''}</small><b id="px">—</b></div>
     </div>
     <div class="mx-pane" id="pp">
-      <div class="mx-guide" id="guide" ${localStorage.getItem(GUIDE) ? 'hidden' : ''}><b>HOW IT WORKS</b><span><i>1</i> Call <em class="u">UP</em> or <em class="d">DOWN</em> on the <b>NEXT</b> round.</span><span><i>2</i> When betting closes, its start price is <b>locked</b>.</span><span><i>3</i> One minute later the end price decides. Right call pays <b>1.9&times;</b>, a tie returns your bet.</span><button aria-label="Close the guide">&times;</button></div>
+      <div class="mx-guide" id="guide" ${localStorage.getItem(GUIDE) ? 'hidden' : ''}><b>HOW IT WORKS</b><span><i>1</i> Call <em class="u">UP</em> or <em class="d">DOWN</em> on the next round</span><span><i>2</i> Betting closes: its price is <b>locked</b></span><span><i>3</i> A minute on: right call pays <b>1.9&times;</b></span><button aria-label="Close the guide">&times;</button></div>
       <div class="mx-cards" id="cards"><div class="mx-slot"></div><div class="mx-slot"></div><div class="mx-slot"></div></div>
       <div class="mx-foot"><div class="mk-recent" id="recent"></div><span class="mx-crowd" id="crowd"></span>${backend.pastRounds ? '<button class="mk-all" id="past">PAST ROUNDS</button>' : ''}</div>
     </div>
@@ -1352,7 +1464,7 @@ function market(root: Root, close: () => void) {
 
   const now = () => Date.now() + (st?.skew ?? 0);
   const mineIn = (s: MarketState, epoch?: number) => (epoch ? s.crowd[epoch]?.find(b => b.mine) ?? placed.get(epoch) : undefined);
-  const pools = (up: number, down: number) => { const t = up + down, u = t ? Math.round((up / t) * 100) : 50; return `<div class="mx-pool"><div class="mx-bar"><i class="u" style="width:${u}%"></i><i class="d" style="width:${100 - u}%"></i></div><div class="mx-pl"><span class="u">${ARROW.up} ${fmt(up)}</span><span class="d">${fmt(down)} ${ARROW.down}</span></div></div>`; };
+  const pools = (up: number, down: number) => { const t = up + down, u = t ? Math.round((up / t) * 100) : 50; return `<div class="mx-pool"><div class="mx-lab">CHIPS ON EACH SIDE</div><div class="mx-bar"><i class="u" style="width:${u}%"></i><i class="d" style="width:${100 - u}%"></i></div><div class="mx-pl"><span class="u">${ARROW.up} ${fmt(up)}</span><span class="d">${fmt(down)} ${ARROW.down}</span></div></div>`; };
   // the clocks and their rings are filled in by `clocks()`, four times a second, so a card's HTML only changes when its content does
   const C = 2 * Math.PI * 22, ring = (cls: string) => `<svg class="mx-ring ${cls}" viewBox="0 0 50 50"><circle cx="25" cy="25" r="22" class="bg"/><circle cx="25" cy="25" r="22" class="fg" data-ring style="stroke-dasharray:${C}"/></svg>`;
 
@@ -1363,7 +1475,7 @@ function market(root: Root, close: () => void) {
     const d = r.lockPrice != null && r.closePrice != null ? r.closePrice - r.lockPrice : null;
     return `<section class="mx-card ended ${o}"><header><span>ENDED</span><b>#${r.epoch}</b></header>
       <div class="mx-res ${o}">${head}</div>
-      ${o === 'void' ? '<p class="mx-dim">No price in time. Every bet came back.</p>' : `<div class="mx-pr"><span>START</span><b>${usd(r.lockPrice)}</b></div><div class="mx-pr"><span>END</span><b>${usd(r.closePrice)}</b></div><div class="mx-pr"><span>MOVE</span><b class="${o}">${d == null ? '—' : `${d > 0 ? '+' : d < 0 ? '−' : ''}${usd(Math.abs(d))}`}</b></div>`}
+      ${o === 'void' ? '<p class="mx-dim">No price in time. Every bet came back.</p>' : `<div class="mx-duo"><div><span>START</span><b>${usd(r.lockPrice)}</b></div><div><span>END</span><b>${usd(r.closePrice)}</b></div></div><div class="mx-move ${o}"><span>MOVED</span><b>${d == null ? '—' : `${d > 0 ? '+' : d < 0 ? '−' : ''}${usd(Math.abs(d))}`}</b></div>`}
       ${pools(r.up, r.down)}
       <div class="mx-you ${mine ? (mine.payout > mine.chips ? 'won' : mine.payout === mine.chips ? 'back' : 'lost') : 'none'}">${mine ? `YOUR CALL ${ARROW[mine.side]} ${mine.side.toUpperCase()} ${fmt(mine.chips)} &middot; ${mine.payout > mine.chips ? `WON +${fmt(mine.payout)}` : mine.payout === mine.chips ? 'RETURNED' : 'LOST'}` : 'You were not in this round'}</div></section>`;
   };
@@ -1373,8 +1485,8 @@ function market(root: Root, close: () => void) {
     const left = (s.open?.lockAt ?? 0) - now(), pricing = s.pending || left <= 0, d = p != null && L.lockPrice != null ? p - L.lockPrice : null, dir = d == null || d === 0 ? 'flat' : d > 0 ? 'up' : 'down';
     const my = mineIn(s, L.epoch), win = my && d != null && d !== 0 ? (d > 0) === (my.side === 'up') : null;
     return `<section class="mx-card live ${dir}"><header><span><i class="mx-dot"></i>LIVE</span><b>#${L.epoch}</b></header>
-      <div class="mx-big"><div class="mx-arrow ${dir}">${dir === 'up' ? ARROW.up : dir === 'down' ? ARROW.down : '='}</div><div class="mx-delta ${dir}">${d == null ? '—' : `${d > 0 ? '+' : d < 0 ? '−' : ''}${usd(Math.abs(d))}`}<small>${d == null || !L.lockPrice ? '' : `${((Math.abs(d) / L.lockPrice) * 100).toFixed(3)}%`}</small></div></div>
-      <div class="mx-pr"><span>LOCKED AT</span><b>${usd(L.lockPrice)}</b></div><div class="mx-pr"><span>NOW</span><b class="${dir}">${usd(p)}</b></div>
+      <div class="mx-big"><div class="mx-arrow ${dir}">${dir === 'up' ? ARROW.up : dir === 'down' ? ARROW.down : '='}</div><div class="mx-delta ${dir}">${d == null ? '—' : `${d > 0 ? '+' : d < 0 ? '−' : ''}${usd(Math.abs(d))}`}</div><small class="mx-pct">${d == null || !L.lockPrice ? '&nbsp;' : `${d > 0 ? 'above' : d < 0 ? 'below' : 'at'} the locked price${d ? ` &middot; ${((Math.abs(d) / L.lockPrice) * 100).toFixed(3)}%` : ''}`}</small></div>
+      <div class="mx-duo"><div><span>LOCKED AT</span><b>${usd(L.lockPrice)}</b></div><div><span>NOW</span><b class="${dir}">${usd(p)}</b></div></div>
       <div class="mx-clock">${ring('res')}<span>${pricing ? '<i class="mk-spin"></i> TAKING THE END PRICE' : 'ENDS IN <b data-clk></b>'}</span></div>
       ${pools(L.up, L.down)}
       <div class="mx-you ${my ? (win === null ? 'even' : win ? 'won' : 'lost') : 'none'}">${my ? `YOUR CALL ${ARROW[my.side]} ${my.side.toUpperCase()} ${fmt(my.chips)} &middot; ${win === null ? 'EVEN' : win ? 'WINNING' : 'LOSING'}` : 'You are not in this round'}</div></section>`;
@@ -1385,8 +1497,8 @@ function market(root: Root, close: () => void) {
     return `<section class="mx-card next ${open ? 'open' : 'closing'}"><header><span>NEXT &middot; TAKING BETS</span><b>#${O.epoch}</b></header>
       <div class="mx-clock big">${ring('bet')}<span>${open ? 'BETS CLOSE IN <b data-clk></b>' : '<i class="mk-spin"></i> LOCKING THE START PRICE'}</span></div>
       ${my ? `<div class="mx-placed ${my.side}"><small>YOUR CALL</small><b>${ARROW[my.side]} ${my.side.toUpperCase()} &middot; ${fmt(my.chips)} CHIP${my.chips === 1 ? '' : 'S'}</b><small>${open ? 'its start price is taken when betting closes' : 'taking its start price now'}</small></div>` : `
-      <div class="mx-sides"><button class="mx-side up ${side === 'up' ? 'sel' : ''}" data-s="up" ${open ? '' : 'disabled'}><b>${ARROW.up} UP</b><small>pays ${s.payout}&times;</small></button><button class="mx-side down ${side === 'down' ? 'sel' : ''}" data-s="down" ${open ? '' : 'disabled'}><b>${ARROW.down} DOWN</b><small>pays ${s.payout}&times;</small></button></div>
-      <div id="chipwrap"></div>
+      <div class="mx-lab">YOUR CALL</div><div class="mx-sides"><button class="mx-side up ${side === 'up' ? 'sel' : ''}" data-s="up" ${open ? '' : 'disabled'}><b>${ARROW.up} UP</b><small>pays ${s.payout}&times;</small></button><button class="mx-side down ${side === 'down' ? 'sel' : ''}" data-s="down" ${open ? '' : 'disabled'}><b>${ARROW.down} DOWN</b><small>pays ${s.payout}&times;</small></button></div>
+      <div class="mx-lab">YOUR STAKE</div><div id="chipwrap"></div>
       <button class="mx-go ${side}" id="go" ${open && !busy ? '' : 'disabled'}><span>CALL ${side.toUpperCase()} &middot; ${fmt(bet)} CHIP${bet === 1 ? '' : 'S'}</span><small>win ${fmt(bet * s.payout)}</small></button>`}
       ${pools(O.up, O.down)}</section>`;
   };
@@ -1394,9 +1506,14 @@ function market(root: Root, close: () => void) {
     const s = st; if (!s) return;
     $px.textContent = usd(s.price ?? s.oraclePrice);
     const moved = shownEpoch && s.open && s.open.epoch !== shownEpoch;
-    [ended(s), liveCard(s), nextCard(s)].forEach((html, i) => { const slot = cards.children[i] as HTMLElement; if (slot.dataset.h !== html) { slot.innerHTML = html; slot.dataset.h = html; } });
+    [ended(s), liveCard(s), nextCard(s)].forEach((html, i) => {
+      const slot = cards.children[i] as HTMLElement; if (slot.dataset.h === html) return; slot.dataset.h = html;
+      const tpl = document.createElement('template'); tpl.innerHTML = html.trim(); const next = tpl.content.firstElementChild!, cur = slot.firstElementChild;
+      if (cur && cur.tagName === next.tagName) morph(cur, next); else slot.replaceChildren(next);
+    });
     clocks();
-    if (moved) { cards.classList.remove('moved'); void cards.offsetWidth; cards.classList.add('moved'); audio.play('hit', 0.3); }
+    // a round closed: the cards slide one place left, once
+    if (moved) { cards.classList.remove('moved'); void cards.offsetWidth; cards.classList.add('moved'); audio.play('hit', 0.3); window.setTimeout(() => cards.classList.remove('moved'), 900); }
     shownEpoch = s.open?.epoch ?? 0;
     const cw = root.querySelector<HTMLElement>('#chipwrap');
     if (cw && !cw.dataset.w) { if (!s.wagers.includes(bet)) bet = s.wagers[0]; cw.dataset.w = '1'; cw.innerHTML = `<div class="mx-chips">${chipRow(bet, s.wagers, 'mkchips')}</div>`; wireChips(root, v => { bet = v; paint(); }, () => busy, 'mkchips'); }

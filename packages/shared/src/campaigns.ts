@@ -13,7 +13,7 @@ export interface NewCampaign {
 export const CAMPAIGN_MIN_BUDGET = [500, 1_000, 200] as const;
 /** what a campaign shows beyond the chain's fields: kept by our server, shown on its page */
 export interface CampaignDetails { project: string; description: string; steps: string[]; banner?: string | null }
-export const DETAIL_LIMITS = { project: 40, description: 400, steps: 4, step: 100, bannerBytes: 1_500_000 };
+export const DETAIL_LIMITS = { project: 40, description: 400, steps: 5, step: 100, bannerBytes: 1_500_000 };
 /** what the Church will print on a campaign's page; null = fine */
 export function detailsProblem(d: CampaignDetails): string | null {
   const plain = (s: string) => /^[^<>]*$/.test(s) && !/https?:|www\./i.test(s);

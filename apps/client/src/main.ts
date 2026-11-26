@@ -137,7 +137,7 @@ async function boot() {
   const resize = () => {
     window.clearTimeout(rt);
     rt = window.setTimeout(() => {
-      if (document.activeElement?.tagName === 'INPUT') return;       // soft keyboard: keep the layout stable
+      if (/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName ?? '')) return;       // soft keyboard: keep the layout stable
       window.scrollTo(0, 0);
       const s = deviceSize(); game.scale.resize(s.w, s.h); css(); uiScale();
     }, 90);

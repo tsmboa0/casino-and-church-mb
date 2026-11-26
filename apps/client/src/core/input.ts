@@ -23,7 +23,8 @@ class InputState {
       c: 'menu', v: 'context',
     };
     window.addEventListener('keydown', (e) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT' || !e.key) return;      // autofill sends key events with no key
+      const tg = e.target as HTMLElement | null;
+      if (!e.key || (tg && (/^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName) || tg.isContentEditable))) return;      // typing is not playing; autofill sends key events with no key
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
       if (!e.repeat) {
