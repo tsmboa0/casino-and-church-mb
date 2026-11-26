@@ -1,6 +1,7 @@
 import cors from '@fastify/cors'; import Fastify from 'fastify'; import type { FastifyRequest } from 'fastify';
 import { addr, b58decode, b64decode, b64encode, buildTx, CHIP, compileMessage, decodeBoard, decodeHouse, decodePlayer, hasClaimed, ix, REALM, type Ix, type Rpc } from '@cnc/realm';
-import { campaignProblem, cleanName, nameKey, nameProblem, type NewCampaign } from '@cnc/shared';
+import { CAMPAIGN_MIN_BUDGET, campaignCost, campaignProblem, cleanName, detailsProblem, DETAIL_LIMITS, nameKey, nameProblem, type CampaignDetails, type NewCampaign } from '@cnc/shared';
+import { createHash } from 'node:crypto';
 import { verifyPrivy } from './privy.ts'; import { FAUCET_FLOOR, SETUP_FLOOR, type Config } from './config.ts'; import { HttpError, type Sponsor } from './sponsor.ts'; import type { Keeper } from './keeper.ts'; import type { Indexer } from './indexer.ts'; import type { MarketKeeper } from './market.ts'; import type { Hosts } from './hosts/service.ts'; import { players, presence } from './hosts/observe.ts'; import type { SolStore } from './store.ts';
 
 export interface Deps { config: Config; store: SolStore; l1: Rpc; er: Rpc; sponsor: Sponsor | null; keeper: Keeper | null; indexer?: Indexer | null; market?: MarketKeeper | null; hosts?: Hosts | null }
@@ -68,13 +69,35 @@ export function buildApp(d: Deps) {
   const boards = async () => Promise.all([0, 1].map(async (i) => { const a = await d.er.account(addr.board(i)); return (a && decodeBoard(a.data)) ?? []; }));
   const me = async (q: FastifyRequest) => { const row = await d.store.byDid(did(q)); if (!row) throw new HttpError(403, 'no_account', 'Finish signing in first.'); return row; };
   /** moderation: the Father signs only what passes the Church's rules (no wallet or airdrop links, known sites) */
-  app.post('/campaigns/approve', async (q) => {
-    const row = await me(q), b = (q.body ?? {}) as any, s = wallet(b.session), c = b.campaign ?? {};
-    const n: NewCampaign = { kind: Number(c.kind), title: String(c.title ?? ''), url: String(c.url ?? ''), machine_id: Number(c.machine_id ?? 0), goal: Number(c.goal ?? 0), reward_chips: Number(c.reward_chips ?? 0), reward_faith_milli: Number(c.reward_faith_milli ?? 0), max_claims: Number(c.max_claims ?? 0) };
-    for (const v of [n.kind, n.machine_id, n.goal, n.reward_chips, n.reward_faith_milli, n.max_claims]) if (!Number.isInteger(v) || v < 0) throw new HttpError(400, 'bad_campaign', 'Use whole numbers.');
+  /** an image a campaign shows: PNG, JPEG, WebP or GIF, checked by its first bytes, at most 1.5 MB */
+  const image = (dataUrl: unknown): { mime: string; bytes: Buffer } | null => {
+    if (dataUrl == null || dataUrl === '') return null; const m = /^data:([a-z/]+);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl)); if (!m) throw new HttpError(400, 'bad_campaign', 'That banner is not an image.');
+    const bytes = Buffer.from(m[2], 'base64'); if (bytes.length > DETAIL_LIMITS.bannerBytes) throw new HttpError(400, 'bad_campaign', 'The banner must be under 1.5 MB.');
+    const sig = bytes.subarray(0, 12).toString('hex'), mime = sig.startsWith('89504e47') ? 'image/png' : sig.startsWith('ffd8ff') ? 'image/jpeg' : sig.startsWith('47494638') ? 'image/gif' : sig.startsWith('52494646') && bytes.subarray(8, 12).toString() === 'WEBP' ? 'image/webp' : null;
+    if (!mime) throw new HttpError(400, 'bad_campaign', 'The banner must be a PNG, JPEG, WebP or GIF.'); return { mime, bytes };
+  };
+  app.post('/campaigns/approve', { bodyLimit: 2_200_000 }, async (q) => {
+    const row = await me(q), b = (q.body ?? {}) as any, s = wallet(b.session), c = b.campaign ?? {}, dt = (b.details ?? {}) as CampaignDetails;
+    const n: NewCampaign = { kind: Number(c.kind), title: String(c.title ?? ''), url: String(c.url ?? ''), machine_id: Number(c.machine_id ?? 0), goal: Number(c.goal ?? 0), reward_chips: Number(c.reward_chips ?? 0), reward_faith_milli: Number(c.reward_faith_milli ?? 0), max_claims: Number(c.max_claims ?? 0), days: Number(c.days ?? 7) };
+    for (const v of [n.kind, n.machine_id, n.goal, n.reward_chips, n.reward_faith_milli, n.max_claims, n.days!]) if (!Number.isInteger(v) || v < 0) throw new HttpError(400, 'bad_campaign', 'Use whole numbers.');
+    const details: CampaignDetails = { project: String(dt.project ?? '').trim(), description: String(dt.description ?? '').trim(), steps: Array.isArray(dt.steps) ? dt.steps.map((x) => String(x).trim()).filter(Boolean) : [] };
+    const dp = detailsProblem(details); if (dp) throw new HttpError(400, 'bad_campaign', dp);
+    if (campaignCost(n).budget < (CAMPAIGN_MIN_BUDGET[n.kind] ?? Infinity)) throw new HttpError(400, 'bad_campaign', `A ${['social', 'project', 'machine'][n.kind] ?? ''} campaign locks up at least ${CAMPAIGN_MIN_BUDGET[n.kind]} chips for its rewards.`);
+    const img = image(dt.banner);
     const problem = campaignProblem(n) ?? (/^[\x20-\x7e]+$/.test(n.title) ? null : 'Plain letters only in the title, please.'); if (problem) throw new HttpError(400, 'bad_campaign', problem);
     await limit('campaign', row.wallet, 15, 'The Father has read enough from you today.'); await d.store.hit('campaign', row.wallet);
-    const live = await boards(), board = live[0].filter((x) => x.active || x.budget > 0n).length < 20 ? 0 : 1; return { tx: await cosign(s, [ix.createCampaign(row.wallet, s, oracle().address, board, n)]) };
+    const live = await boards(), board = live[0].filter((x) => x.active || x.budget > 0n).length < 20 ? 0 : 1; const tx = await cosign(s, [ix.createCampaign(row.wallet, s, oracle().address, board, { ...n, days: n.days! })]);
+    let banner: string | null = null; if (img) { banner = createHash('sha256').update(img.bytes).digest('hex'); await d.store.addBanner(banner, img.mime, img.bytes); }
+    await d.store.addDetails({ id: null, wallet: row.wallet, ...details, banner, at: Date.now(), hidden: false });      // bound to the campaign when the chain names it
+    return { tx };
+  });
+  /** what campaigns show beyond the chain */
+  app.get('/campaigns/details', async (q) => { const ids = String((q.query as any).ids ?? '').split(',').map(Number).filter((n) => Number.isInteger(n) && n >= 0).slice(0, 60); return { details: (await d.store.details(ids)).filter((x) => !x.hidden).map((x) => ({ id: x.id, project: x.project, description: x.description, steps: x.steps, banner: x.banner ? `/banners/${x.banner}` : null })), hidden: (await d.store.details(ids)).filter((x) => x.hidden).map((x) => x.id) }; });
+  app.get('/banners/:sha', async (q, reply) => { const b = await d.store.banner(String((q.params as any).sha)); if (!b) throw new HttpError(404, 'not_found', 'No such banner.'); return reply.header('content-type', b.mime).header('cache-control', 'public, max-age=31536000, immutable').header('x-content-type-options', 'nosniff').header('content-security-policy', "default-src 'none'").send(b.bytes); });
+  /** taking down what should not be there: ADMIN_TOKEN, from a script */
+  app.post('/admin/campaigns/:id/hide', async (q) => {
+    const token = process.env.ADMIN_TOKEN; if (!token || q.headers['x-admin-token'] !== token) throw new HttpError(403, 'not_allowed', 'No.');
+    const what = (q.body as any)?.what === 'all' ? 'all' : 'banner'; return { ok: await d.store.hideDetails(Number((q.params as any).id), what), what };
   });
   /** the player opens a social or project task: the visit starts */
   app.post('/campaigns/:id/start', async (q) => { const row = await me(q), id = Number((q.params as any).id); if (opened.size > 20_000) opened.clear(); opened.set(`${id}:${row.wallet}`, Date.now()); return { visit_s: VISIT_S }; });

@@ -18,7 +18,9 @@ pub const MAX_REWARD_CHIPS: u32 = 50;
 pub const MAX_REWARD_FAITH: u32 = 5_000;
 pub const MAX_CLAIMS: u32 = 500;
 pub const MIN_LISTING: u64 = 10 * CHIP;
-pub const CREATOR_FAITH: u32 = 10_000;
+/// the least a campaign of each kind must lock up for its rewards: social 0.5 SOL, project 1 SOL, machine 0.2 SOL
+pub const MIN_BUDGET: [u64; 3] = [500 * CHIP, 1_000 * CHIP, 200 * CHIP];
+pub const MAX_DAYS: u8 = 30;
 pub const DAILY_FAITH: u32 = 10_000;
 
 pub struct New<'a> {
@@ -30,6 +32,8 @@ pub struct New<'a> {
     pub reward_chips: u32,
     pub reward_faith_milli: u32,
     pub max_claims: u32,
+    /// how long it runs, 1 to 30 days; what is left is refunded after
+    pub days: u8,
 }
 pub fn check(c: &New) -> R<()> {
     let t = c.title;
@@ -38,6 +42,7 @@ pub fn check(c: &New) -> R<()> {
         && c.url.len() <= 160 && (c.url.is_empty() || c.url.starts_with("https://")) && c.url.bytes().all(|b| (0x21..0x7f).contains(&b))
         && c.reward_chips <= MAX_REWARD_CHIPS && c.reward_faith_milli <= MAX_REWARD_FAITH && (c.reward_chips > 0 || c.reward_faith_milli > 0)
         && (1..=MAX_CLAIMS).contains(&c.max_claims)
+        && (1..=MAX_DAYS).contains(&c.days)
         && if c.kind == MACHINE { c.machine_id > 0 && (1..=50).contains(&c.goal) && c.url.is_empty() } else { c.machine_id == 0 && c.goal == 0 && !c.url.is_empty() };
     if ok { Ok(()) } else { Err(ChurchError::BadArgs) }
 }
@@ -58,14 +63,15 @@ fn list(b: &mut Board, creator: Pubkey, c: &New, budget: u64, from_treasury: boo
     };
     s.title[..c.title.len()].copy_from_slice(c.title.as_bytes());
     s.url[..c.url.len()].copy_from_slice(c.url.as_bytes());
+    s._pad[0] = c.days;
     b.slots[i] = s;
     Ok(id)
 }
 pub fn create(p: &mut Player, h: &mut House, b: &mut Board, c: &New, owns_machine: bool, now: i64) -> R<u32> {
     check(c)?;
     if c.kind == MACHINE && !owns_machine { return Err(ChurchError::NotAllowed); }
-    if p.faith_milli < CREATOR_FAITH { return Err(ChurchError::FaithLow); }
     let (budget, listing) = cost(c.reward_chips, c.max_claims);
+    if budget < MIN_BUDGET[usize::from(c.kind)] { return Err(ChurchError::BadWager); }
     if p.chips < budget + listing { return Err(ChurchError::NoChips); }
     let id = list(b, p.authority, c, budget, false, now)?;
     p.chips -= budget + listing;
@@ -94,7 +100,7 @@ fn claimed(p: &Player, id: u32) -> bool {
 pub fn claim(p: &mut Player, h: &mut House, b: &mut Board, id: u32, attested: bool, now: i64) -> R<(u64, u32)> {
     let i = find(b, id)?;
     let c = b.slots[i];
-    if c.active == 0 { return Err(ChurchError::Closed); }
+    if c.active == 0 || ended(&c, now) { return Err(ChurchError::Closed); }
     if claimed(p, id) { return Err(ChurchError::AlreadyClaimed); }
     if c.creator == p.authority { return Err(ChurchError::NotAllowed); }
     if c.kind == MACHINE {
@@ -124,6 +130,17 @@ pub fn claim(p: &mut Player, h: &mut House, b: &mut Board, id: u32, attested: bo
     s.claims += 1;
     if s.claims >= s.max_claims { s.active = 0; }
     Ok((chips / CHIP, applied))
+}
+/// a campaign's last second; 0 days (the first ones) never end by themselves
+pub fn ends(c: &Campaign) -> i64 { if c._pad[0] == 0 { i64::MAX } else { c.created + i64::from(c._pad[0]) * DAY_S } }
+fn ended(c: &Campaign, now: i64) -> bool { now >= ends(c) }
+/// Its time is up: anyone may close it, and then collect the rest for whoever paid.
+pub fn expire(b: &mut Board, id: u32, now: i64) -> R<()> {
+    let i = find(b, id)?;
+    if b.slots[i].active == 0 { return Err(ChurchError::Closed); }
+    if !ended(&b.slots[i], now) { return Err(ChurchError::TooEarly); }
+    b.slots[i].active = 0;
+    Ok(())
 }
 /// Closing only stops it. What is left is collected with `collect`.
 pub fn close(b: &mut Board, id: u32, who: &Pubkey, admin: bool) -> R<()> {
@@ -155,7 +172,7 @@ pub fn collect(creator: Option<&mut Player>, h: &mut House, b: &mut Board, id: u
 mod tests {
     use super::*;
     use crate::bets::tests::{balanced, rig};
-    fn n<'a>() -> New<'a> { New { kind: SOCIAL, title: "Follow us", url: "https://x.com/a", machine_id: 0, goal: 0, reward_chips: 5, reward_faith_milli: 3_000, max_claims: 2 } }
+    fn n<'a>() -> New<'a> { New { kind: SOCIAL, title: "Follow us", url: "https://x.com/a", machine_id: 0, goal: 0, reward_chips: 50, reward_faith_milli: 3_000, max_claims: 10, days: 7 } }
     fn who(b: u8, chips: u64) -> Player { let mut p: Player = bytemuck::Zeroable::zeroed(); p.authority = Pubkey::new_from_array([b; 32]); p.chips = chips * CHIP; p.faith_milli = 20_000; p }
     fn all(chips: u64) -> (Player, Player, House, Board) {
         let (_, mut h) = rig(5_000, 0);
@@ -167,7 +184,7 @@ mod tests {
     #[test]
     fn wording_and_limits() {
         check(&n()).unwrap();
-        for c in [New { kind: 3, ..n() }, New { title: "ab", ..n() }, New { title: " abc", ..n() }, New { title: "a\u{202e}bc", ..n() }, New { url: "http://x.com", ..n() }, New { url: "", ..n() }, New { url: "https://x.com/ a", ..n() }, New { reward_chips: 51, ..n() }, New { reward_faith_milli: 5_001, ..n() }, New { reward_chips: 0, reward_faith_milli: 0, ..n() }, New { max_claims: 0, ..n() }, New { max_claims: 501, ..n() }, New { goal: 1, ..n() }, New { kind: MACHINE, ..n() }, New { kind: MACHINE, url: "", machine_id: 1, goal: 51, ..n() }] {
+        for c in [New { kind: 3, ..n() }, New { title: "ab", ..n() }, New { title: " abc", ..n() }, New { title: "a\u{202e}bc", ..n() }, New { url: "http://x.com", ..n() }, New { url: "", ..n() }, New { url: "https://x.com/ a", ..n() }, New { reward_chips: 51, ..n() }, New { reward_faith_milli: 5_001, ..n() }, New { reward_chips: 0, reward_faith_milli: 0, ..n() }, New { max_claims: 0, ..n() }, New { max_claims: 501, ..n() }, New { goal: 1, ..n() }, New { kind: MACHINE, ..n() }, New { kind: MACHINE, url: "", machine_id: 1, goal: 51, ..n() }, New { days: 0, ..n() }, New { days: 31, ..n() }] {
             assert_eq!(check(&c), Err(ChurchError::BadArgs), "{} {}", c.title, c.url);
         }
         check(&New { kind: MACHINE, url: "", machine_id: 1, goal: 50, ..n() }).unwrap();
@@ -175,21 +192,36 @@ mod tests {
         assert_eq!(cost(50, 500), (25_000 * CHIP, 2_500 * CHIP));
     }
     #[test]
+    fn no_faith_needed_but_a_minimum_to_lock_up_and_an_end() {
+        let (mut p, mut q, mut h, mut b) = all(2_000);
+        p.faith_milli = 0;
+        assert_eq!(create(&mut p, &mut h, &mut b, &New { reward_chips: 49, ..n() }, false, 1), Err(ChurchError::BadWager), "490 is under 0.5 SOL");
+        let id = create(&mut p, &mut h, &mut b, &n(), false, 1_000).unwrap();
+        assert_eq!((p.chips, h.escrow_total), (1_450 * CHIP, 500 * CHIP), "500 locked and 50 to the treasury");
+        assert_eq!(create(&mut p, &mut h, &mut b, &New { kind: PROJECT, reward_chips: 50, max_claims: 19, ..n() }, false, 1), Err(ChurchError::BadWager), "a project locks 1 SOL");
+        assert_eq!(create(&mut p, &mut h, &mut b, &New { kind: MACHINE, url: "", machine_id: 3, goal: 2, reward_chips: 19, max_claims: 10, ..n() }, true, 1), Err(ChurchError::BadWager), "a machine one 0.2 SOL");
+        create(&mut p, &mut h, &mut b, &New { kind: MACHINE, url: "", machine_id: 3, goal: 2, reward_chips: 20, max_claims: 10, ..n() }, true, 1).unwrap();
+        let end = 1_000 + 7 * DAY_S;
+        assert_eq!(expire(&mut b, id, end - 1), Err(ChurchError::TooEarly));
+        assert_eq!(claim(&mut q, &mut h, &mut b, id, true, end), Err(ChurchError::Closed), "over at its last second");
+        expire(&mut b, id, end).unwrap();
+        assert_eq!(expire(&mut b, id, end), Err(ChurchError::Closed));
+        assert_eq!(collect(Some(&mut p), &mut h, &mut b, id), Ok(500 * CHIP));
+        balanced(&h);
+    }
+    #[test]
     fn a_campaign_from_start_to_refund() {
-        let (mut p, mut q, mut h, mut b) = all(30);
+        let (mut p, mut q, mut h, mut b) = all(560);
         b.index = 1;
-        p.faith_milli = 9_999;
-        assert_eq!(create(&mut p, &mut h, &mut b, &n(), false, 1), Err(ChurchError::FaithLow));
-        p.faith_milli = 10_000;
-        assert_eq!(create(&mut p, &mut h, &mut b, &New { max_claims: 5, ..n() }, false, 1), Err(ChurchError::NoChips));
+        assert_eq!(create(&mut p, &mut h, &mut b, &New { max_claims: 11, ..n() }, false, 1), Err(ChurchError::NoChips));
         assert_eq!(create(&mut p, &mut h, &mut b, &New { kind: MACHINE, url: "", machine_id: 1, goal: 1, ..n() }, false, 1), Err(ChurchError::NotAllowed));
         let id = create(&mut p, &mut h, &mut b, &n(), false, 1).unwrap();
-        assert_eq!((id, p.chips, h.escrow_total), (128, 10 * CHIP, 10 * CHIP));
+        assert_eq!((id, p.chips, h.escrow_total), (128, 10 * CHIP, 500 * CHIP));
         balanced(&h);
         assert_eq!(claim(&mut q, &mut h, &mut b, id, false, 0), Err(ChurchError::NotAllowed), "not attested");
         assert_eq!(claim(&mut p, &mut h, &mut b, id, true, 0), Err(ChurchError::NotAllowed), "your own");
-        assert_eq!(claim(&mut q, &mut h, &mut b, id, true, 0), Ok((5, 3_000)));
-        assert_eq!((q.chips, q.bonus), (5 * CHIP, 0), "a player paid: real chips");
+        assert_eq!(claim(&mut q, &mut h, &mut b, id, true, 0), Ok((50, 3_000)));
+        assert_eq!((q.chips, q.bonus), (50 * CHIP, 0), "a player paid: real chips");
         assert_eq!(claim(&mut q, &mut h, &mut b, id, true, 0), Err(ChurchError::AlreadyClaimed));
         assert_eq!(collect(Some(&mut p), &mut h, &mut b, id), Err(ChurchError::TooEarly));
         assert_eq!(close(&mut b, id, &q.authority, false), Err(ChurchError::NotAllowed));
@@ -198,9 +230,9 @@ mod tests {
         let mut z = who(3, 0);
         assert_eq!(claim(&mut z, &mut h, &mut b, id, true, 0), Err(ChurchError::Closed));
         assert_eq!(collect(Some(&mut z), &mut h, &mut b, id), Err(ChurchError::NotAllowed));
-        assert_eq!(collect(Some(&mut p), &mut h, &mut b, id), Ok(5 * CHIP));
+        assert_eq!(collect(Some(&mut p), &mut h, &mut b, id), Ok(450 * CHIP));
         assert_eq!(collect(Some(&mut p), &mut h, &mut b, id), Err(ChurchError::NothingPending));
-        assert_eq!((p.chips, h.escrow_total), (15 * CHIP, 0));
+        assert_eq!((p.chips, h.escrow_total), (460 * CHIP, 0));
         balanced(&h);
     }
     #[test]
@@ -208,7 +240,7 @@ mod tests {
         let (_, mut q, mut h, mut b) = all(0);
         let admin = Pubkey::new_from_array([9; 32]);
         assert_eq!(seed(admin, &mut h, &mut b, &New { reward_chips: 50, max_claims: 6, ..n() }, 1), Err(ChurchError::TreasuryLow));
-        let ids: Vec<u32> = (0..4).map(|_| seed(admin, &mut h, &mut b, &New { reward_chips: 2, reward_faith_milli: 4_000, ..n() }, 1).unwrap()).collect();
+        let ids: Vec<u32> = (0..4).map(|_| seed(admin, &mut h, &mut b, &New { reward_chips: 2, reward_faith_milli: 4_000, max_claims: 2, ..n() }, 1).unwrap()).collect();
         let v = h.vault;
         let got: Vec<u32> = ids.iter().map(|i| claim(&mut q, &mut h, &mut b, *i, true, 5).unwrap().1).collect();
         assert_eq!(got, vec![4_000, 4_000, 2_000, 0]);
@@ -221,18 +253,19 @@ mod tests {
     }
     #[test]
     fn machine_campaigns_need_the_plays_and_slots_are_reused() {
-        let (mut p, mut q, mut h, mut b) = all(5_000);
-        let id = create(&mut p, &mut h, &mut b, &New { kind: MACHINE, url: "", machine_id: 7, goal: 3, max_claims: 1, ..n() }, true, 1).unwrap();
+        let (mut p, mut q, mut h, mut b) = all(12_000);
+        let id = create(&mut p, &mut h, &mut b, &New { kind: MACHINE, url: "", machine_id: 7, goal: 3, reward_chips: 50, max_claims: 4, ..n() }, true, 1).unwrap();
         q.machine_plays[1] = crate::state::MachinePlays { machine_id: 7, plays: 2 };
         assert_eq!(claim(&mut q, &mut h, &mut b, id, true, 0), Err(ChurchError::NotDone));
         q.machine_plays[1].plays = 3;
         claim(&mut q, &mut h, &mut b, id, false, 0).unwrap();
+        for k in 4..7u8 { let mut x = who(k, 0); x.machine_plays[0] = crate::state::MachinePlays { machine_id: 7, plays: 3 }; claim(&mut x, &mut h, &mut b, id, false, 0).unwrap(); }
         assert_eq!(b.slots[find(&b, id).unwrap()].active, 0, "the last claim closes it");
-        for i in 0..BOARD_SLOTS as i64 { create(&mut p, &mut h, &mut b, &New { max_claims: 1, ..n() }, false, 10 + i).unwrap(); }
-        assert_eq!(create(&mut p, &mut h, &mut b, &New { max_claims: 1, ..n() }, false, 99), Err(ChurchError::BoardFull), "20 open");
+        for i in 0..BOARD_SLOTS as i64 { create(&mut p, &mut h, &mut b, &n(), false, 10 + i).unwrap(); }
+        assert_eq!(create(&mut p, &mut h, &mut b, &n(), false, 99), Err(ChurchError::BoardFull), "20 open");
         assert!(find(&b, id).is_err(), "the closed one made room");
         b.slots[0].active = 0;
-        assert_eq!(create(&mut p, &mut h, &mut b, &New { max_claims: 1, ..n() }, false, 99), Err(ChurchError::BoardFull), "its refund is still there");
+        assert_eq!(create(&mut p, &mut h, &mut b, &n(), false, 99), Err(ChurchError::BoardFull), "its refund is still there");
         b.next = BOARD_IDS;
         assert_eq!(create(&mut p, &mut h, &mut b, &n(), false, 99), Err(ChurchError::BoardFull));
         balanced(&h);

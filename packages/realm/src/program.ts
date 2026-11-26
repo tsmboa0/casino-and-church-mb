@@ -51,6 +51,7 @@ export const hostCallBytes = (c: HostCallInput) => { const [t, a, b, d] = callPa
 export const hostCallHashBytes = (c: HostCallInput) => { const [t, a, b, d] = callParts(c); return concat(u8(t), u32(a), u32(b), u32(d)); };
 /** sha256(id || agent || response sha256 || action): it is what L1 records and the rollup checks */
 export const decisionHash = (id: Uint8Array, agent: number, responseSha256: Uint8Array, c: HostCallInput) => sha256(concat(id, u8(agent), responseSha256, hostCallHashBytes(c)));
+export const campaignsOpenedFromLogs = (logs: string[], d64: (s: string) => Uint8Array) => events(logs, d64, 'CampaignOpened', 36).map((r) => ({ id: r.u32(), wallet: r.key() }));
 /** tithes and candles, for the hosts' view of the church */
 export const churchFromLogs = (logs: string[], d64: (s: string) => Uint8Array) => [
   ...events(logs, d64, 'Tithed', 44).map((r) => ({ kind: 'tithe' as const, wallet: r.key(), chips: Number(r.u64()) / 1e6 })),
@@ -65,8 +66,8 @@ export function anchoredFromLogs(logs: string[], d64: (s: string) => Uint8Array)
     out.push({ agent, hash, id, policy, action, model, signedText, signature: r.raw(65), signingAddress: r.raw(20), requestSha256: r.raw(32), responseSha256: r.raw(32) }); }
   return out;
 }
-export interface CampaignInput { kind: number; title: string; url: string; machine_id: number; goal: number; reward_chips: number; reward_faith_milli: number; max_claims: number }
-const campaignBytes = (c: CampaignInput) => concat(u8(c.kind), str(c.title), str(c.url), u32(c.machine_id), u32(c.goal), u32(c.reward_chips), u32(c.reward_faith_milli), u32(c.max_claims));
+export interface CampaignInput { kind: number; title: string; url: string; machine_id: number; goal: number; reward_chips: number; reward_faith_milli: number; max_claims: number; days: number }
+const campaignBytes = (c: CampaignInput) => concat(u8(c.kind), str(c.title), str(c.url), u32(c.machine_id), u32(c.goal), u32(c.reward_chips), u32(c.reward_faith_milli), u32(c.max_claims), u8(c.days));
 const mine = (w: string) => ({ authority: w, player: addr.player(w), purse: addr.purse(w) });
 const play = (w: string, signer: string) => ({ ...mine(w), signer, ...(signer === w ? {} : { session_token: addr.sessionToken(w, signer) }) });
 export const ix = {
@@ -115,6 +116,8 @@ export const ix = {
   claimCampaign: (w: string, signer: string, id: number, oracle?: string) => realmIx('claim_campaign', { ...play(w, signer), board: addr.board(id >> 7), ...(oracle ? { oracle } : {}) }, u32(id)),
   closeCampaign: (w: string, signer: string, id: number) => realmIx('close_campaign', { signer, authority: w, board: addr.board(id >> 7), ...(signer === w ? {} : { session_token: addr.sessionToken(w, signer) }) }, u32(id)),
   /** anyone; `creator` unless the treasury paid for it */
+  /** anyone, once its days are over */
+  expireCampaign: (id: number) => realmIx('expire_campaign', { board: addr.board(id >> 7) }, u32(id)),
   collectCampaign: (id: number, creator?: string) => realmIx('collect_campaign', { board: addr.board(id >> 7), ...(creator ? { player: addr.player(creator) } : {}) }, u32(id)),
   // the hosts: written on L1 first, then acted on, once
   anchorDecision: (host: string, agent: number, hash: Uint8Array, p: DecisionProofInput) => realmIx('anchor_decision', { host }, concat(u8(agent), hash, p.id, u8(p.policy), str(p.action), str(p.model), str(p.signedText), p.signature, p.signingAddress, p.requestSha256, p.responseSha256)),
@@ -204,10 +207,11 @@ export function decodePlots(d: Uint8Array): MachineState[] | null {
   for (let i = 0; i < 3; i++) { const owner = r.key(), bankroll = r.u64(), reserved = r.u64(), plays = Number(r.u64()), earned = r.i64(), name = r.text(16), id = r.u32(), skin = r.u8(); r.skip(3); if (id) out.push({ plot: i + 1, id, owner, name, skin, bankroll, reserved, plays, earned }); }
   return out;
 }
-export interface CampaignState { id: number; creator: string; budget: bigint; created: number; machineId: number; goal: number; rewardChips: number; rewardFaithMilli: number; maxClaims: number; claims: number; kind: number; active: boolean; fromTreasury: boolean; title: string; url: string }
+/** `endsAt`: unix seconds; 0 = never (the first ones) */
+export interface CampaignState { endsAt: number; id: number; creator: string; budget: bigint; created: number; machineId: number; goal: number; rewardChips: number; rewardFaithMilli: number; maxClaims: number; claims: number; kind: number; active: boolean; fromTreasury: boolean; title: string; url: string }
 export function decodeBoard(d: Uint8Array): CampaignState[] | null {
   if (!has(d, 'Board')) return null; const r = new Reader(d), out: CampaignState[] = [];
-  for (let i = 0; i < 20; i++) { const start = r.o; const creator = r.key(), budget = r.u64(), created = r.i64(), id = r.u32(), machineId = r.u32(), goal = r.u32(), rewardChips = r.u32(), rewardFaithMilli = r.u32(), maxClaims = r.u32(), claims = r.u32(), kind = r.u8(), active = r.u8() !== 0, fromTreasury = r.u8() !== 0, tl = r.u8(), ul = r.u8(); r.skip(3); const title = new TextDecoder().decode(r.raw(60).subarray(0, tl)), url = new TextDecoder().decode(r.raw(160).subarray(0, ul)); r.o = start + 304; if (created) out.push({ id, creator, budget, created, machineId, goal, rewardChips, rewardFaithMilli, maxClaims, claims, kind, active, fromTreasury, title, url }); }
+  for (let i = 0; i < 20; i++) { const start = r.o; const creator = r.key(), budget = r.u64(), created = r.i64(), id = r.u32(), machineId = r.u32(), goal = r.u32(), rewardChips = r.u32(), rewardFaithMilli = r.u32(), maxClaims = r.u32(), claims = r.u32(), kind = r.u8(), active = r.u8() !== 0, fromTreasury = r.u8() !== 0, tl = r.u8(), ul = r.u8(), days = r.u8(); r.skip(2); const title = new TextDecoder().decode(r.raw(60).subarray(0, tl)), url = new TextDecoder().decode(r.raw(160).subarray(0, ul)); r.o = start + 304; if (created) out.push({ endsAt: days ? created + days * 86_400 : 0, id, creator, budget, created, machineId, goal, rewardChips, rewardFaithMilli, maxClaims, claims, kind, active, fromTreasury, title, url }); }
   return out;
 }
 export const hasClaimed = (p: Pick<PlayerState, 'campaigns'>, id: number) => !!(p.campaigns[id >> 3] >> (id & 7) & 1);

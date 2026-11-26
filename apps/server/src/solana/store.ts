@@ -12,11 +12,16 @@ export interface DecisionRow {
   signatureKind: string | null; attestationId: number | null; tokens: number; observation: unknown;
 }
 export interface AttestRow { id: number; at: number; model: string; nonce: string; signingAddress: string; intelQuoteBytes: number; hasGpuEvidence: boolean }
+/** what a campaign shows beyond the chain: bound to its id once the chain names it */
+export interface DetailsRow { id: number | null; wallet: string; project: string; description: string; steps: string[]; banner: string | null; at: number; hidden: boolean }
 export interface BetStats { volume: number; houseNet: number; bets: number; biggest: { payout: number; game: string; wallet: string } | null }
 export interface SolStore {
   addDecision(d: DecisionRow): Promise<void>; decisions(agent: 'fortuna' | 'nakamoto' | 'all', limit: number): Promise<DecisionRow[]>; decision(id: string): Promise<DecisionRow | null>;
   addAttestation(a: Omit<AttestRow, 'id'>): Promise<AttestRow>; latestAttestation(model: string): Promise<AttestRow | null>; attestation(id: number): Promise<AttestRow | null>;
   betStats(sinceMs: number): Promise<BetStats>;
+  /** details wait for their campaign's id (the creation event), then are bound to it */
+  addDetails(d: DetailsRow): Promise<void>; bindDetails(wallet: string, id: number): Promise<void>; details(ids: number[]): Promise<DetailsRow[]>; hideDetails(id: number, what: 'banner' | 'all'): Promise<boolean>;
+  addBanner(sha: string, mime: string, bytes: Buffer): Promise<void>; banner(sha: string): Promise<{ mime: string; bytes: Buffer } | null>;
   addCall(c: CallRow): Promise<void>; calls(epochs: number[]): Promise<CallRow[]>; maxSeq(wallet: string): Promise<bigint>;
   addRound(r: RoundRow): Promise<void>; rounds(before: number | null, limit: number): Promise<RoundRow[]>; setPage(page: number, tx: string): Promise<void>;
   addBet(b: BetRow): Promise<void>; bets(wallet: string, limit: number): Promise<BetRow[]>; nets(): Promise<Map<string, { wagered: number; net: number }>>;
@@ -29,13 +34,21 @@ export interface SolStore {
 }
 /** development, and a fallback with no database: memory, saved to a small file */
 export class FileStore implements SolStore {
-  private betRows: BetRow[] = []; private rows = new Map<string, PlayerRow>(); private log: { kind: string; id: string; at: number }[] = []; private callRows: CallRow[] = []; private roundRows = new Map<number, RoundRow>(); private pages: Record<number, string> = {}; private decs: DecisionRow[] = []; private atts: AttestRow[] = []; private later: NodeJS.Timeout | null = null;
-  constructor(private file: string | null) { if (file && existsSync(file)) { const j = JSON.parse(readFileSync(file, 'utf8')); for (const r of j.rows) this.rows.set(r.wallet, r); this.log = j.log ?? []; this.betRows = j.bets ?? []; this.callRows = j.calls ?? []; for (const r of j.rounds ?? []) this.roundRows.set(r.epoch, r); this.pages = j.pages ?? {}; this.decs = j.decisions ?? []; this.atts = j.attestations ?? []; } }
+  private betRows: BetRow[] = []; private rows = new Map<string, PlayerRow>(); private log: { kind: string; id: string; at: number }[] = []; private callRows: CallRow[] = []; private roundRows = new Map<number, RoundRow>(); private pages: Record<number, string> = {}; private decs: DecisionRow[] = []; private atts: AttestRow[] = []; private dets: DetailsRow[] = []; private later: NodeJS.Timeout | null = null;
+  constructor(private file: string | null) { if (file && existsSync(file)) { const j = JSON.parse(readFileSync(file, 'utf8')); for (const r of j.rows) this.rows.set(r.wallet, r); this.log = j.log ?? []; this.betRows = j.bets ?? []; this.callRows = j.calls ?? []; for (const r of j.rounds ?? []) this.roundRows.set(r.epoch, r); this.pages = j.pages ?? {}; this.decs = j.decisions ?? []; this.atts = j.attestations ?? []; this.dets = j.details ?? []; } }
   /** rounds and calls come all day: one write a few seconds later covers them */
   private soon() { if (this.file && !this.later) { this.later = setTimeout(() => { this.later = null; this.save(); }, 3_000); this.later.unref(); } }
-  private save() { if (!this.file) return; mkdirSync(dirname(this.file), { recursive: true }); this.log = this.log.filter((x) => x.at > Date.now() - 2 * 86_400_000); writeFileSync(this.file, JSON.stringify({ rows: [...this.rows.values()], log: this.log, bets: this.betRows.slice(-5000), calls: this.callRows.slice(-2000), rounds: [...this.roundRows.values()].slice(-12_000), pages: this.pages, decisions: this.decs.slice(-600), attestations: this.atts.slice(-50) })); }
+  private save() { if (!this.file) return; mkdirSync(dirname(this.file), { recursive: true }); this.log = this.log.filter((x) => x.at > Date.now() - 2 * 86_400_000); writeFileSync(this.file, JSON.stringify({ rows: [...this.rows.values()], log: this.log, bets: this.betRows.slice(-5000), calls: this.callRows.slice(-2000), rounds: [...this.roundRows.values()].slice(-12_000), pages: this.pages, decisions: this.decs.slice(-600), attestations: this.atts.slice(-50), details: this.dets.slice(-2_000) })); }
   async addBet(b: BetRow) { if (this.betRows.some((x) => x.wallet === b.wallet && x.seq === b.seq)) return; this.betRows.push(b); this.save(); }
   async bets(w: string, n: number) { return this.betRows.filter((b) => b.wallet === w).slice(-n).reverse(); }
+  async addDetails(d: DetailsRow) { this.dets.push(d); this.save(); }
+  async bindDetails(w: string, id: number) { if (this.dets.some((x) => x.id === id)) return; const d = [...this.dets].reverse().find((x) => x.wallet === w && x.id === null && Date.now() - x.at < 15 * 60_000); if (d) { d.id = id; this.save(); } }
+  async details(ids: number[]) { return this.dets.filter((d) => d.id !== null && ids.includes(d.id)); }
+  async hideDetails(id: number, what: 'banner' | 'all') { const d = this.dets.find((x) => x.id === id); if (!d) return false; if (what === 'all') d.hidden = true; else d.banner = null; this.save(); return true; }
+  private bannerDir() { return this.file ? `${dirname(this.file)}/banners` : null; }
+  private mem = new Map<string, { mime: string; bytes: Buffer }>();
+  async addBanner(sha: string, mime: string, bytes: Buffer) { const dir = this.bannerDir(); if (!dir) { this.mem.set(sha, { mime, bytes }); return; } mkdirSync(dir, { recursive: true }); writeFileSync(`${dir}/${sha}`, bytes); writeFileSync(`${dir}/${sha}.type`, mime); }
+  async banner(sha: string) { const dir = this.bannerDir(); if (!dir) return this.mem.get(sha) ?? null; if (!/^[0-9a-f]{64}$/.test(sha) || !existsSync(`${dir}/${sha}`)) return null; return { mime: readFileSync(`${dir}/${sha}.type`, 'utf8'), bytes: readFileSync(`${dir}/${sha}`) }; }
   async addDecision(d: DecisionRow) { const i = this.decs.findIndex((x) => x.id === d.id); if (i >= 0) this.decs[i] = d; else this.decs.push(d); this.save(); }
   async decisions(a: 'fortuna' | 'nakamoto' | 'all', n: number) { return this.decs.filter((d) => a === 'all' || d.agent === a).slice(-n).reverse(); }
   async decision(id: string) { return this.decs.find((d) => d.id === id) ?? null; }
@@ -69,11 +82,19 @@ export class PgStore implements SolStore {
       CREATE TABLE IF NOT EXISTS sol_rounds (epoch BIGINT PRIMARY KEY, outcome TEXT NOT NULL, lock_price DOUBLE PRECISION NOT NULL, close_price DOUBLE PRECISION NOT NULL, closed_at TIMESTAMPTZ NOT NULL, up DOUBLE PRECISION NOT NULL, down DOUBLE PRECISION NOT NULL, bets INT NOT NULL, tx TEXT);
       CREATE TABLE IF NOT EXISTS sol_pages (page BIGINT PRIMARY KEY, tx TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sol_decisions (id TEXT PRIMARY KEY, agent TEXT NOT NULL, at TIMESTAMPTZ NOT NULL, row JSONB NOT NULL); CREATE INDEX IF NOT EXISTS sol_decisions_ix ON sol_decisions (agent, at DESC);
-      CREATE TABLE IF NOT EXISTS sol_attestations (id SERIAL PRIMARY KEY, model TEXT NOT NULL, at TIMESTAMPTZ NOT NULL, row JSONB NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS sol_attestations (id SERIAL PRIMARY KEY, model TEXT NOT NULL, at TIMESTAMPTZ NOT NULL, row JSONB NOT NULL);
+      CREATE TABLE IF NOT EXISTS sol_details (n SERIAL PRIMARY KEY, id BIGINT UNIQUE, wallet TEXT NOT NULL, at TIMESTAMPTZ NOT NULL DEFAULT now(), row JSONB NOT NULL);
+      CREATE TABLE IF NOT EXISTS sol_banners (sha TEXT PRIMARY KEY, mime TEXT NOT NULL, bytes BYTEA NOT NULL);`);
     return new PgStore(db);
   }
   async addBet(b: BetRow) { await this.db.query('INSERT INTO sol_bets (wallet, seq, game, wager, payout, detail, randomness, tx, at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,to_timestamp($9/1000.0)) ON CONFLICT DO NOTHING', [b.wallet, b.seq, b.game, b.wager, b.payout, b.detail, b.randomness, b.tx, b.at]); }
   async bets(w: string, n: number) { return (await this.db.query('SELECT * FROM sol_bets WHERE wallet=$1 ORDER BY seq DESC LIMIT $2', [w, n])).rows.map((r) => ({ ...r, seq: String(r.seq), at: +r.at })); }
+  async addDetails(d: DetailsRow) { await this.db.query('INSERT INTO sol_details (id, wallet, row) VALUES ($1,$2,$3)', [d.id, d.wallet, JSON.stringify(d)]); }
+  async bindDetails(w: string, id: number) { await this.db.query("UPDATE sol_details SET id = $2, row = jsonb_set(row, '{id}', to_jsonb($2::bigint)) WHERE n = (SELECT n FROM sol_details WHERE wallet = $1 AND id IS NULL AND at > now() - interval '15 minutes' ORDER BY n DESC LIMIT 1) AND NOT EXISTS (SELECT 1 FROM sol_details WHERE id = $2)", [w, id]); }
+  async details(ids: number[]) { return (await this.db.query('SELECT row FROM sol_details WHERE id = ANY($1::bigint[])', [ids])).rows.map((r) => r.row); }
+  async hideDetails(id: number, what: 'banner' | 'all') { const r = await this.db.query(what === 'all' ? "UPDATE sol_details SET row = jsonb_set(row, '{hidden}', 'true') WHERE id = $1" : "UPDATE sol_details SET row = jsonb_set(row, '{banner}', 'null') WHERE id = $1", [id]); return (r.rowCount ?? 0) > 0; }
+  async addBanner(sha: string, mime: string, bytes: Buffer) { await this.db.query('INSERT INTO sol_banners (sha, mime, bytes) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [sha, mime, bytes]); }
+  async banner(sha: string) { const r = (await this.db.query('SELECT mime, bytes FROM sol_banners WHERE sha = $1', [sha])).rows[0]; return r ? { mime: r.mime, bytes: r.bytes } : null; }
   async addDecision(d: DecisionRow) { await this.db.query('INSERT INTO sol_decisions (id, agent, at, row) VALUES ($1,$2,to_timestamp($3/1000.0),$4) ON CONFLICT (id) DO UPDATE SET row = EXCLUDED.row', [d.id, d.agent, d.at, JSON.stringify(d)]); }
   async decisions(a: 'fortuna' | 'nakamoto' | 'all', n: number) { return (await this.db.query("SELECT row FROM sol_decisions WHERE $1 = 'all' OR agent = $1 ORDER BY at DESC LIMIT $2", [a, n])).rows.map((r) => r.row); }
   async decision(id: string) { return (await this.db.query('SELECT row FROM sol_decisions WHERE id = $1', [id])).rows[0]?.row ?? null; }

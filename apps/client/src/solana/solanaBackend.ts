@@ -1,5 +1,5 @@
 import { addSignatures, addr, anchoredFromLogs, b64decode, b64encode, BJ, BJ_LABELS, buildTx, decodeBoard, decodeFeed, decodeMarket, decodePlots, hasClaimed, MARKET_HEAD, OUTCOMES, P, ChainError, CHIP, CHIPS_PER_SOL, compileMessage, GAME, GAME_NAMES, decodeHouse, decodePlayer, decodePurse, ix, REALM, Rpc, type BetResultState, type HandState, type Ix, type MarketState as ChainMarket, type PlayerState, type RoundRecState, type RoundState } from '@cnc/realm';
-import { cleanName, nameProblem, type NewCampaign } from '@cnc/shared';
+import { cleanName, nameProblem, type CampaignDetails, type NewCampaign } from '@cnc/shared';
 import { BackendError } from '../core/errors';
 import type { AgentDecision, AgentId, AgentProof, Backend, BetProof, BetReq, BetResult, BjState, CampaignRow, ChurchStats, HostCheck, HouseStats, LbRow, RealmEvent, MarketCrowdBet, MarketResult, MarketRound, MarketSide, MarketState, PastRound, WheelResult } from '../core/backend';
 import { bus } from '../core/bus';
@@ -216,6 +216,7 @@ export class SolanaBackend implements Backend {
     return {
       enabled: h.enabled, epoch: open.epoch, pending: h.enabled && now >= open.lockAt, roundS: h.roundS, graceS: h.graceS, payout: h.payoutBps / 10_000, wagers: h.wagers, open, live, crowd, skew,
       recent: this.mk.ring.slice(0, 12).map((r) => ({ epoch: r.epoch, phase: r.outcome === 4 ? 'void' as const : 'closed' as const, openAt: 0, lockAt: 0, lockedAt: 0, closedAt: r.closedTs * 1000, lockPrice: r.lockC / 100, closePrice: r.closeC / 100, up: r.up, down: r.down, bets: r.bets, outcome: OUTCOMES[r.outcome] as MarketRound['outcome'] })),
+      myResults: Object.fromEntries((this.player?.recent ?? []).filter((b) => b.game === GAME.market).map((b) => { const low = b.outcome[2] | (b.outcome[3] << 8), r = this.mk.ring.find((x) => (x.epoch & 0xffff) === low); return [r?.epoch ?? -1, { side: b.outcome[0] === 1 ? 'up' as const : 'down' as const, chips: n(b.wager), payout: n(b.payout) }]; })),
       price: this.mk.cents ? this.mk.cents / 100 : null, history: [], oraclePrice: h.lastPriceC ? h.lastPriceC / 100 : null, oracleAt: h.lastPriceTs * 1000, oracle: 'Pyth Lazer oracle',
     };
   }
@@ -306,7 +307,9 @@ export class SolanaBackend implements Backend {
   }
   async campaigns(): Promise<CampaignRow[]> {
     const [bs] = await Promise.all([Promise.all([0, 1].map(async (i) => { const a = await this.er.account(addr.board(i)); return (a && decodeBoard(a.data)) ?? []; })), this.readPlots()]); const p = this.player;
-    return bs.flat().sort((a, b) => b.created - a.created).map((c) => ({ id: c.id, kind: c.kind, creator: c.creator, title: c.title, url: c.url, machineId: c.machineId, goal: c.goal, rewardChips: c.rewardChips, rewardFaith: c.rewardFaithMilli / 1000, maxClaims: c.maxClaims, claims: c.claims, active: c.active, free: c.fromTreasury, refund: c.active ? 0 : n(c.budget), claimed: !!p && hasClaimed(p, c.id), progress: p?.machinePlays.find((m) => m.machineId === c.machineId)?.plays ?? 0, mine: c.creator === this.me }));
+    const all = bs.flat(); const det = await this.get<{ details: (CampaignDetails & { id: number })[]; hidden: number[] }>(`/campaigns/details?ids=${all.map((c) => c.id).join(',')}`).catch(() => ({ details: [], hidden: [] as number[] }));
+    const extra = new Map(det.details.map((x) => [x.id, x]));
+    return all.filter((c) => !det.hidden.includes(c.id)).sort((a, b) => b.created - a.created).map((c) => ({ ...(extra.has(c.id) ? { project: extra.get(c.id)!.project, description: extra.get(c.id)!.description, steps: extra.get(c.id)!.steps, banner: extra.get(c.id)!.banner ? this.api + extra.get(c.id)!.banner : null } : {}), endsAt: c.endsAt, id: c.id, kind: c.kind, creator: c.creator, title: c.title, url: c.url, machineId: c.machineId, goal: c.goal, rewardChips: c.rewardChips, rewardFaith: c.rewardFaithMilli / 1000, maxClaims: c.maxClaims, claims: c.claims, active: c.active, free: c.fromTreasury, refund: c.active ? 0 : n(c.budget), claimed: !!p && hasClaimed(p, c.id), progress: p?.machinePlays.find((m) => m.machineId === c.machineId)?.plays ?? 0, mine: c.creator === this.me }));
   }
   async startCampaign(id: number) { const r = await this.post<{ visit_s: number }>(`/campaigns/${id}/start`, {}).catch((e) => { throw friendly(e); }); return { visitS: r.visit_s }; }
   async claimCampaign(id: number) {
@@ -314,7 +317,7 @@ export class SolanaBackend implements Backend {
     if (c.kind === 2) await this.play((w, s) => ix.claimCampaign(w, s, id)); else { const s = await this.session(); const { tx } = await this.post<{ tx: string }>(`/campaigns/${id}/claim`, { session: s.address }); await this.cosigned(tx); }
     return { chips: c.rewardChips, faith: Number((this.player?.faithEarnedMilli ?? 0n) - f) / 1000 };
   }
-  async createCampaign(c: NewCampaign) { const s = await this.session(); const before = new Set((await this.campaigns()).map((x) => x.id)); const { tx } = await this.post<{ tx: string }>('/campaigns/approve', { session: s.address, campaign: c }); await this.cosigned(tx); return (await this.campaigns()).find((x) => x.mine && !before.has(x.id))?.id ?? 0; }
+  async createCampaign(c: NewCampaign, details?: CampaignDetails) { const s = await this.session(); const before = new Set((await this.campaigns()).map((x) => x.id)); const { tx } = await this.post<{ tx: string }>('/campaigns/approve', { session: s.address, campaign: c, details }); await this.cosigned(tx); return (await this.campaigns()).find((x) => x.mine && !before.has(x.id))?.id ?? 0; }
   async closeCampaign(id: number) { const open = (await this.campaigns()).find((c) => c.id === id)?.active; if (open) await this.play((w, s) => ix.closeCampaign(w, s, id)); await this.act([ix.collectCampaign(id, this.need())]).catch((e) => { if ((e as BackendError).code !== 'NothingPending') throw e; }); }
 
 

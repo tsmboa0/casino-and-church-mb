@@ -1,4 +1,4 @@
-import { addr, buildTx, compileMessage, decodeBank, decodeHouse, decodePlayer, decodePurse, ix, P, REALM, type Ix, type Rpc, type Signer } from '@cnc/realm';
+import { addr, buildTx, compileMessage, decodeBank, decodeBoard, decodeHouse, decodePlayer, decodePurse, ix, P, REALM, type Ix, type Rpc, type Signer } from '@cnc/realm';
 
 import type { MarketKeeper } from './market.ts';
 
@@ -8,7 +8,7 @@ export interface Books { ok: boolean; at: number; problems: string[] }
  * only where the program says. If it stops, players' own actions do the same work.
  */
 export class Keeper {
-  status = { running: false, at: 0, synced: 0, paid: 0, redelegated: 0, refunded: 0, stood: 0, errors: 0, lastError: null as string | null };
+  status = { running: false, at: 0, synced: 0, paid: 0, redelegated: 0, refunded: 0, stood: 0, expired: 0, collected: 0, errors: 0, lastError: null as string | null };
   books: Books = { ok: true, at: 0, problems: [] };
   private timer: NodeJS.Timeout | null = null; private round = 0;
   constructor(private l1: Rpc, private er: Rpc, private key: Signer, private sponsor: Signer, private wallets: () => Promise<string[]>, private everyMs = 20_000, private market: MarketKeeper | null = null) {}
@@ -38,9 +38,17 @@ export class Keeper {
           if (base.withdrawn > pu.paidOut) { await this.send(this.l1, [ix.settlePayout(ws[i])], this.key); this.status.paid++; }
         } catch (e) { fail(e); }
       }
+      if (this.round % 3 === 0) await this.campaigns().catch(fail);
       if (this.round++ % 15 === 0) await this.check();
     } catch (e) { fail(e); }
     this.status.at = Date.now();
+  }
+  /** campaigns whose days are over: close them, and send what is left back to whoever paid */
+  async campaigns() {
+    const now = Date.now() / 1000;
+    for (const i of [0, 1]) { const a = await this.er.account(addr.board(i)), b = a && decodeBoard(a.data); if (!b) continue;
+      for (const c of b) { if (c.active && c.endsAt && now >= c.endsAt) { await this.send(this.er, [ix.expireCampaign(c.id)], this.key); this.status.expired++; c.active = false; }
+        if (!c.active && c.budget > 0n) { await this.send(this.er, [ix.collectCampaign(c.id, c.fromTreasury ? undefined : c.creator)], this.key); this.status.collected++; } } }
   }
   /** I1 to I3 (MAGICBLOCK_PLAN 6.8) */
   async check() {

@@ -1,4 +1,4 @@
-import { CAMPAIGN_LIMITS, campaignCost, campaignProblem, type NewCampaign } from '@cnc/shared';
+import { type CampaignDetails, CAMPAIGN_LIMITS, campaignCost, campaignProblem, type NewCampaign } from '@cnc/shared';
 import { store, type Plot, type HistRow } from './state';
 import { bus } from './bus';
 import {
@@ -42,6 +42,8 @@ export interface CampaignRow {
   rewardChips: number; rewardFaith: number; maxClaims: number; claims: number; active: boolean; claimed: boolean; progress: number; mine: boolean;
   /** the Church pays: bonus chips. `refund`: chips left in a closed one */
   free?: boolean; refund?: number;
+  /** what the page shows beyond the chain; `endsAt` unix seconds (0: no end) */
+  project?: string; description?: string; steps?: string[]; banner?: string | null; endsAt?: number;
 }
 export interface AgentProof { model: string; chatId: string; signedText: string; signature: string; signingAddress: string;
   signatureKind: 'provider_tee' | 'gateway'; requestB64: string; responseB64: string; attestedSigner: string; attestationAt: number; txHash?: string; /** Solana: the L1 record */ anchorTx?: string }
@@ -83,6 +85,8 @@ export interface MarketState {
   skew: number;
   /** who prices it, for the footer */
   oracle: string;
+  /** my results in rounds that ended, by epoch */
+  myResults?: Record<number, { side: MarketSide; chips: number; payout: number }>;
 }
 export interface MarketResult {
   betId: number; side: MarketSide; outcome: Exclude<MarketOutcome, ''>; wager: number; payout: number; blessing: number;
@@ -138,7 +142,7 @@ export interface Backend {
   campaigns?(): Promise<CampaignRow[]>;
   startCampaign?(id: number): Promise<{ visitS: number }>;
   claimCampaign?(id: number): Promise<{ chips: number; faith: number }>;
-  createCampaign?(c: NewCampaign): Promise<number>;
+  createCampaign?(c: NewCampaign, details?: CampaignDetails): Promise<number>;
   closeCampaign?(id: number): Promise<void>;
   /** OPTIONAL (chain mode): username + password accounts. The password never leaves the device. */
   signUp?(username: string, password: string): Promise<void>;
@@ -428,7 +432,7 @@ class MockBackend implements Backend {
           if (payout) store.change({ chips: payout });
           this.log('btc', b.chips, payout, `BTC ${b.side.toUpperCase()} · $${live.lockPrice!.toFixed(2)} → $${price.toFixed(2)}`);
           const res: MarketResult = { betId: b.betId, side: b.side, outcome: live.outcome as MarketResult['outcome'], wager: b.chips, payout, blessing: 0, lockPrice: live.lockPrice, closePrice: price, luckGain: won || !refund ? 0.1 * b.chips : 0 };
-          m.results.set(b.betId, res); m.bets.delete(b.betId);
+          m.results.set(b.betId, { ...res, epoch: live.epoch }); m.bets.delete(b.betId);
           setTimeout(() => bus.emit('marketSettled', res), 0);
         }
       }
@@ -447,7 +451,7 @@ class MockBackend implements Backend {
       enabled: true, epoch: m.epoch, pending: false, roundS: 60, graceS: 45, payout: 1.9, wagers: [1, 2, 5, 10],
       open: { ...open }, live: live?.phase === 'live' ? { ...live } : null, recent: recent.map((r) => ({ ...r })), crowd,
       price: this.walk(), history: m.history.slice(-300), oraclePrice: live?.lockPrice ?? null, oracleAt: live?.lockedAt ?? 0, skew: 0,
-      oracle: 'demo price (offline)',
+      oracle: 'demo price (offline)', myResults: Object.fromEntries([...m.results.values()].map((r) => [r.epoch ?? 0, { side: r.side, chips: r.wager, payout: r.payout }])),
     };
   }
   async marketBet(epoch: number, side: MarketSide, chips: number) {
@@ -467,9 +471,9 @@ class MockBackend implements Backend {
 
   // ---- campaigns (demo): the same rules as the contract, kept in memory; the Church "oracle" waits 5 s
   private camps: CampaignRow[] = [
-    { id: 1, kind: 0, creator: 'admin', title: 'Follow @NEARProtocol on X', url: 'https://x.com/NEARProtocol', machineId: 0, goal: 0, rewardChips: 2, rewardFaith: 3, maxClaims: 50, claims: 12, active: true, claimed: false, progress: 0, mine: false },
-    { id: 2, kind: 1, creator: 'admin', title: 'Read how NEAR AI keeps the hosts honest', url: 'https://docs.near.ai/', machineId: 0, goal: 0, rewardChips: 0, rewardFaith: 2, maxClaims: 200, claims: 31, active: true, claimed: false, progress: 0, mine: false },
-    { id: 3, kind: 0, creator: 'admin', title: 'Share the game with #NEARHackathon', url: 'https://x.com/intent/post?text=Playing%20The%20Casino%20%26%20The%20Church%20%23NEARHackathon', machineId: 0, goal: 0, rewardChips: 2, rewardFaith: 3, maxClaims: 30, claims: 4, active: true, claimed: false, progress: 0, mine: false },
+    { id: 1, kind: 0, creator: 'admin', title: 'Follow MagicBlock on X', url: 'https://x.com/magicblock', machineId: 0, goal: 0, rewardChips: 2, rewardFaith: 3, maxClaims: 50, claims: 12, active: true, claimed: false, progress: 0, mine: false, free: true, project: 'MagicBlock', description: 'The engine under this game: rollups that make Solana games feel instant.', steps: ['Open MagicBlock on X', 'Follow the account', 'Come back and claim'], endsAt: Date.now() / 1000 + 6 * 86_400 },
+    { id: 2, kind: 1, creator: 'admin', title: 'Read how Ephemeral Rollups work', url: 'https://docs.magicblock.gg/', machineId: 0, goal: 0, rewardChips: 0, rewardFaith: 2, maxClaims: 200, claims: 31, active: true, claimed: false, progress: 0, mine: false, free: true, project: 'The Church', description: 'Every bet here settles on a rollup in under a second. Learn how.', endsAt: Date.now() / 1000 + 20 * 86_400 },
+    { id: 3, kind: 0, creator: 'admin', title: 'Share the game with your friends', url: 'https://x.com/intent/post?text=Playing%20The%20Casino%20%26%20The%20Church', machineId: 0, goal: 0, rewardChips: 2, rewardFaith: 3, maxClaims: 30, claims: 4, active: true, claimed: false, progress: 0, mine: false, free: true, project: 'The Church', description: 'Bring a friend to the Crossroads. The Father rewards every new pilgrim.', endsAt: Date.now() / 1000 + 3 * 86_400 },
   ];
   private campStarts = new Map<number, number>();
   async campaigns() { return this.camps.map((c) => ({ ...c })).reverse(); }
@@ -486,15 +490,14 @@ class MockBackend implements Backend {
     store.eco.chips += c!.rewardChips; store.eco.faith = Math.min(100, store.eco.faith + c!.rewardFaith); store.emit();
     return { chips: c!.rewardChips, faith: c!.rewardFaith };
   }
-  async createCampaign(n: NewCampaign) {
+  async createCampaign(n: NewCampaign, d?: CampaignDetails) {
     await sleep(700);
     const problem = campaignProblem(n); if (problem) fail('bad_campaign', problem);
-    if (store.eco.faith < CAMPAIGN_LIMITS.creatorMinFaith) fail('faith_low', `You need FAITH ${CAMPAIGN_LIMITS.creatorMinFaith} to open a campaign.`);
     const cost = campaignCost(n);
     if (store.eco.chips < cost.total) fail('no_chips', `This campaign costs ${cost.total} chips.`);
     store.eco.chips -= cost.total; store.stats.pool += cost.listing; store.emit();
     const id = Math.max(...this.camps.map((c) => c.id)) + 1;
-    this.camps.push({ id, kind: n.kind, creator: 'you', title: n.title, url: n.url, machineId: n.machine_id, goal: n.goal, rewardChips: n.reward_chips, rewardFaith: n.reward_faith_milli / 1000, maxClaims: n.max_claims, claims: 0, active: true, claimed: false, progress: 0, mine: true });
+    this.camps.push({ id, kind: n.kind, creator: 'you', title: n.title, url: n.url, machineId: n.machine_id, goal: n.goal, rewardChips: n.reward_chips, rewardFaith: n.reward_faith_milli / 1000, maxClaims: n.max_claims, claims: 0, active: true, claimed: false, progress: 0, mine: true, project: d?.project, description: d?.description, steps: d?.steps, banner: d?.banner, endsAt: Date.now() / 1000 + (n.days ?? 7) * 86_400 });
     return id;
   }
   async closeCampaign(id: number) {

@@ -861,6 +861,10 @@ pub mod realm {
         if !admin { authorize(&a.signer.key(), &a.authority.key(), a.session_token.as_ref())?; }
         ch(campaigns::close(&mut *a.board.load_mut()?, id, &a.authority.key(), admin))
     }
+    /// Its time is up. Anyone may close it; `collect_campaign` then returns the rest.
+    pub fn expire_campaign(ctx: Context<ExpireCampaign>, id: u32) -> Result<()> {
+        ch(campaigns::expire(&mut *ctx.accounts.board.load_mut()?, id, Clock::get()?.unix_timestamp))
+    }
     /// A closed campaign's unspent rewards, back to whoever paid. Anyone may call it.
     pub fn collect_campaign(ctx: Context<CollectCampaign>, id: u32) -> Result<()> {
         let a = &ctx.accounts;
@@ -1161,10 +1165,11 @@ pub struct CampaignArgs {
     pub reward_chips: u32,
     pub reward_faith_milli: u32,
     pub max_claims: u32,
+    pub days: u8,
 }
 impl CampaignArgs {
     fn view(&self) -> campaigns::New<'_> {
-        campaigns::New { kind: self.kind, title: &self.title, url: &self.url, machine_id: self.machine_id, goal: self.goal, reward_chips: self.reward_chips, reward_faith_milli: self.reward_faith_milli, max_claims: self.max_claims }
+        campaigns::New { kind: self.kind, title: &self.title, url: &self.url, machine_id: self.machine_id, goal: self.goal, reward_chips: self.reward_chips, reward_faith_milli: self.reward_faith_milli, max_claims: self.max_claims, days: self.days }
     }
 }
 
@@ -1817,4 +1822,10 @@ pub struct HostAct<'info> {
     /// for alms
     #[account(mut)]
     pub player: Option<AccountLoader<'info, Player>>,
+}
+
+#[derive(Accounts)]
+pub struct ExpireCampaign<'info> {
+    #[account(mut, seeds = [SEED_BOARD, &[board.load()?.index]], bump)]
+    pub board: AccountLoader<'info, Board>,
 }

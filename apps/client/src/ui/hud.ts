@@ -41,6 +41,10 @@ export function mountHud(avatarSheet: (id: string) => string) {
   store.on(refresh); refresh(); paintSound();
   el('btn-menu').addEventListener('click', () => bus.emit('menu'));
   el('btn-places').addEventListener('click', () => bus.emit('panel', 'places', 'Places', 'places'));
+  // the chips pill explains chips, bonus chips, LUCK and FAITH; it glows until it has been opened once
+  el('hud-chips').setAttribute('role', 'button'); el('hud-chips').setAttribute('tabindex', '0'); el('hud-chips').title = 'Your chips, LUCK and FAITH';
+  el('hud-chips').addEventListener('click', () => bus.emit('panel', 'guide', 'Your chips', 'guide'));
+  try { if (!localStorage.getItem('cnc.guide.seen') && !new URLSearchParams(location.search).has('agent')) document.body.classList.add('guide-new'); } catch { /* */ }
   el('btn-exit').addEventListener('click', () => bus.emit('exit'));
   // live realm events (Happy Hour / Vigil): a pill per event with a countdown; tap it to open the Crossroads board
   const pills = el('evpills');
@@ -99,6 +103,7 @@ const PANEL_COPY: Record<PanelKind, { t: string; body: string; tag: string }> = 
   confessional: { t: 'Confessional', tag: 'LIVE', body: '' },
   places: { t: 'Places', tag: 'LIVE', body: 'Go to any location.' },
   market: { t: 'BTC Exchange', tag: 'LIVE', body: 'Call BTC up or down for the next minute.' },
+  guide: { t: 'Your chips, LUCK and FAITH', tag: 'HELP', body: '' },
   commission: { t: 'Commission Desk', tag: 'LIVE', body: 'Commission a mission for the Quest Board.' },
 };
 
