@@ -29,19 +29,25 @@
 >
 > It is two.
 >
-> On one side lies **The Casino** (*the speculators*): flashing lights, spinning wheels, memecoin madness. Fortunes made, fortunes lost.
+> On one side lies **The Casino**: the speculators.
 >
-> On the other side stands **The Church** (*the believers*): a hall of sermons, prophecy, and belief, promising freedom and salvation through code.
+> On the other side stands **The Church**: the believers.
 >
 > But here is the truth:
 > *The Casino funds the Church.*
 > *The Church built the Casino.*
-> *Neither can live without the other.*
 >
-> In the Casino, your **LUCK** rises as you play. In the Church, your **FAITH** grows through tithes, candles and quests.
-> Spend too long in one realm and the other fades.
+> Neither can live without the other, and only those who master the balance between the two worlds are truly successful in crypto.
+>
+> In this game, you are a wanderer between the two realms.
+>
+> In the Casino, your **LUCK** will rise by playing the casino games. In the Church, your **FAITH** will grow through quests.
+>
+> But beware: if you spend too long in one realm, the other will fade. Too much gambling, and your FAITH begins to crumble. Too much preaching, and your LUCK runs dry.
 >
 > **Balance is survival.**
+>
+> *Welcome to The Casino and The Church.*
 
 ---
 

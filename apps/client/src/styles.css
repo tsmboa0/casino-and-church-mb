@@ -607,3 +607,7 @@ input, textarea, [id^="privy"] *, #headlessui-portal-root * { user-select: text;
 #rollup-banner { position: fixed; left: 50%; top: calc(8px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 400; display: flex; gap: 10px; align-items: baseline; max-width: 92vw; padding: 8px 14px; background: #14101cf0; border: 2px solid #f5c542; color: #f4ead5; font-size: 12px; pointer-events: none; }
 #rollup-banner b { color: #f5c542; white-space: nowrap; font-size: 11px; }
 #val-bonus { font-style: normal; font-size: 9px; color: #8af0a4; letter-spacing: .04em; }
+
+/* the backstory pauses while the reader holds it */
+.book { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.book.paused .bk-caret { animation: none; opacity: .35; }

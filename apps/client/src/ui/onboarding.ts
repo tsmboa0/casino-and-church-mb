@@ -397,15 +397,18 @@ export function showSplash(onTap: () => void): Promise<void> {
   const STORY: string[][] = [
     ['Most believe crypto is one thing. They are wrong.'],
     ['It is two.'],
-    ['On one side lies The Casino — flashing lights, spinning wheels, memecoin madness. Fortunes made, fortunes lost. It is exhilarating, unpredictable, intoxicating.'],
-    ['On the other side stands The Church — a hall of sermons, prophecy, and belief. Here, the faithful argue over visions of tomorrow, promising freedom and salvation through code. It is solemn, righteous, inspiring.'],
-    ['But here is the truth:', 'The Casino funds the Church.', 'The Church built the Casino.', 'Neither can live without the other.'],
+    ['On one side lies The Casino: the speculators.'],
+    ['On the other side stands The Church: the believers.'],
+    ['But here is the truth:', 'The Casino funds the Church.', 'The Church built the Casino.'],
+    ['Neither can live without the other, and only those who master the balance between the two worlds are truly successful in crypto.'],
     ['In this game, you are a wanderer between the two realms.'],
-    ['In the Casino, your LUCK will rise and fall as you play the casino games.', 'In the Church, your FAITH will grow through writing, quests, and prophecy.'],
-    ['But beware—if you spend too long in one realm, the other will fade.', 'Too much gambling, and your FAITH begins to crumble.', 'Too much preaching, and your LUCK runs dry.'],
-    ['Balance is survival.', 'LUCK fuels FAITH.', 'FAITH shapes LUCK.', 'Together, they decide your fate.'],
+    ['In the Casino, your LUCK will rise by playing the casino games. In the Church, your FAITH will grow through quests.'],
+    ['But beware: if you spend too long in one realm, the other will fade. Too much gambling, and your FAITH begins to crumble. Too much preaching, and your LUCK runs dry.'],
+    ['Balance is survival.'],
     ['Welcome to The Casino and The Church.'],
   ];
+  /** the closing lines, set apart */
+  const LAST = 2;
 export function openBook(root: HTMLElement, onDone: () => void, doneLabel = 'START', skipLabel = 'SKIP') {
   {
     root.innerHTML = `
@@ -420,10 +423,10 @@ export function openBook(root: HTMLElement, onDone: () => void, doneLabel = 'STA
     const book = root.querySelector('.book') as HTMLElement;
     const pages = [root.querySelector('#fl') as HTMLElement, root.querySelector('#fr') as HTMLElement];
     const folios = [...root.querySelectorAll<HTMLElement>('.folio')];
-    let side = 0, spread = 1, fast = false, alive = true, timer = 0;
+    let side = 0, spread = 1, fast = false, alive = true, timer = 0, paused = false, splitAt = STORY.length;
     const caret = document.createElement('i'); caret.className = 'bk-caret';
     const fits = (el: HTMLElement) => el.scrollHeight <= el.clientHeight + 1;
-    const wait = (ms: number) => new Promise<void>((r) => { timer = window.setTimeout(r, fast ? Math.min(ms, 6) : ms); });
+    const wait = (ms: number) => new Promise<void>((r) => { const go = () => { if (paused && alive && !fast) { timer = window.setTimeout(go, 60); return; } r(); }; timer = window.setTimeout(go, fast ? Math.min(ms, 6) : ms); });
     /** a human typist: uneven keys, a breath after commas, a pause after a sentence */
     const keyDelay = (ch: string) => 0.756 * (ch === '.' || ch === ':' || ch === '—' ? 260 : ch === ',' ? 140 : ch === ' ' ? 45 + Math.random() * 50 : 28 + Math.random() * 42 + (Math.random() < 0.06 ? 120 : 0));
     /**
@@ -484,12 +487,27 @@ export function openBook(root: HTMLElement, onDone: () => void, doneLabel = 'STA
         }
       }
     };
+    const cls = (i: number, j: number) => `${j === 0 ? 'para' : 'line'}${i >= STORY.length - LAST ? ' welcome' : ''}`;
+    const lay = () => {
+      const fill = (el: HTMLElement, from: number, to: number) => { el.querySelectorAll('p').forEach(x => x.remove()); for (let i = from; i < to; i++) STORY[i].forEach((s, j) => { const q = document.createElement('p'); q.className = cls(i, j); q.textContent = s; el.append(q); }); };
+      const base = parseFloat(getComputedStyle(pages[0]).fontSize) || 16;
+      for (let px = base; px >= 10; px -= 0.5) {
+        pages.forEach(f => (f.style.fontSize = `${px}px`));
+        let k = 0; for (; k < STORY.length; k++) { fill(pages[0], 0, k + 1); if (!fits(pages[0])) break; }
+        fill(pages[0], 0, k); fill(pages[1], k, STORY.length);
+        const ok = fits(pages[0]) && fits(pages[1]);
+        pages.forEach(f => f.querySelectorAll('p').forEach(x => x.remove()));
+        if (ok) { splitAt = k; return; }
+      }
+      pages.forEach(f => (f.style.fontSize = '')); splitAt = STORY.length;           // too small a screen: the pages turn as before
+    };
     const run = async () => {
+      lay();
       await wait(500);
       for (let i = 0; i < STORY.length && alive; i++) {
-        const last = i === STORY.length - 1;
+        if (i === splitAt && side === 0) side = 1;
         for (let j = 0; j < STORY[i].length && alive; j++) {
-          await typeLine(STORY[i][j], `${j === 0 ? 'para' : 'line'}${last ? ' welcome' : ''}`);
+          await typeLine(STORY[i][j], cls(i, j));
         }
         await wait(fast ? 0 : 320);
       }
@@ -500,7 +518,12 @@ export function openBook(root: HTMLElement, onDone: () => void, doneLabel = 'STA
     const leave = () => { alive = false; window.clearTimeout(timer); window.removeEventListener('keydown', onKey); onDone(); };
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!(root.querySelector('#start') as HTMLElement).hidden) leave(); else fast = true; } };
     window.addEventListener('keydown', onKey);
-    book.addEventListener('click', () => { fast = true; });                 // tap the book: the typist hurries
+    const hold = (on: boolean) => { paused = on; book.classList.toggle('paused', on); };
+    book.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') hold(true); });
+    book.addEventListener('pointerleave', () => hold(false));
+    book.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse') { hold(true); book.setPointerCapture?.(e.pointerId); } });
+    ['pointerup', 'pointercancel'].forEach(k => book.addEventListener(k, (e) => { if ((e as PointerEvent).pointerType !== 'mouse') hold(false); }));
+    book.addEventListener('contextmenu', (e) => e.preventDefault());            // a long press must not open a menu
     root.querySelector('#skip')!.addEventListener('click', leave);
     root.querySelector('#start')!.addEventListener('click', leave);
     void run().catch(() => { /* a page too small to type on: let them go on */ (root.querySelector('#start') as HTMLElement).hidden = false; });
