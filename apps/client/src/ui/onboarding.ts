@@ -285,7 +285,7 @@ export async function startOnboarding(manifest: any, onDone: (p: Profile) => voi
     // say what happens to the wallet, briefly and truthfully
     const note = root.querySelector('#wnote') as HTMLElement;
     note.innerHTML = accounts
-      ? `${icon('wallet', 12)}<span>${draft.securing ? 'Your NEAR wallet on this device' : 'A NEAR wallet is created for you. It'} is encrypted with your password on this device; our server only ever stores that locked copy.</span>`
+      ? `${icon('wallet', 12)}<span>${draft.securing ? 'Your wallet on this device' : 'A wallet is created for you. It'} is encrypted with your password on this device; our server only ever stores that locked copy.</span>`
       : me ? `${icon('wallet', 12)}<span>Your Solana wallet ${shortAddress(me)} is ready.</span>`
       : `${icon('wallet', 12)}<span>Demo mode: chips are pretend and nothing is saved on chain.</span>`;
     note.hidden = false;

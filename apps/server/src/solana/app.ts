@@ -1,14 +1,22 @@
 import cors from '@fastify/cors'; import Fastify from 'fastify'; import type { FastifyRequest } from 'fastify';
 import { addr, b58decode, b64decode, b64encode, buildTx, CHIP, compileMessage, decodeBoard, decodeHouse, decodePlayer, hasClaimed, ix, REALM, type Ix, type Rpc } from '@cnc/realm';
 import { CAMPAIGN_MIN_BUDGET, campaignCost, campaignProblem, cleanName, detailsProblem, DETAIL_LIMITS, nameKey, nameProblem, type CampaignDetails, type NewCampaign } from '@cnc/shared';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { verifyPrivy } from './privy.ts'; import { FAUCET_FLOOR, SETUP_FLOOR, type Config } from './config.ts'; import { HttpError, type Sponsor } from './sponsor.ts'; import type { Keeper } from './keeper.ts'; import type { Indexer } from './indexer.ts'; import type { MarketKeeper } from './market.ts'; import type { Hosts } from './hosts/service.ts'; import { players, presence } from './hosts/observe.ts'; import type { SolStore } from './store.ts';
 
 export interface Deps { config: Config; store: SolStore; l1: Rpc; er: Rpc; sponsor: Sponsor | null; keeper: Keeper | null; indexer?: Indexer | null; market?: MarketKeeper | null; hosts?: Hosts | null }
 const DAY = 86_400_000;
 const wallet = (v: unknown) => { const s = String(v ?? ''); try { if (b58decode(s).length === 32) return s; } catch { /* */ } throw new HttpError(400, 'bad_args', 'That is not a Solana address.'); };
 export function buildApp(d: Deps) {
-  const app = Fastify({ trustProxy: true, bodyLimit: 32_768 }); void app.register(cors, { origin: d.config.origins, maxAge: 600 });
+  const app = Fastify({ trustProxy: (_a: string, i: number) => i < Number(process.env.TRUST_PROXY_HOPS ?? 1), bodyLimit: 32_768 }); void app.register(cors, { origin: d.config.origins, maxAge: 600 });
+  // a ceiling per network, well above what a busy table of players sends (a market panel polls once a second)
+  const hits = new Map<string, { n: number; post: number; at: number }>(), PER_MIN = Number(process.env.REQS_PER_MIN ?? 2_400), POSTS_PER_MIN = Number(process.env.POSTS_PER_MIN ?? 240);
+  app.addHook('onRequest', async (q, reply) => {
+    reply.header('x-content-type-options', 'nosniff'); reply.header('referrer-policy', 'no-referrer');
+    if (q.url === '/healthz') return; const now = Date.now(); let h = hits.get(q.ip); if (!h || now - h.at > 60_000) { if (hits.size > 50_000) hits.clear(); h = { n: 0, post: 0, at: now }; hits.set(q.ip, h); }
+    h.n++; if (q.method === 'POST') h.post++;
+    if (h.n > PER_MIN || h.post > POSTS_PER_MIN) throw new HttpError(429, 'slow_down', 'Too many requests from this network. Wait a minute.');
+  });
   app.setErrorHandler((e, _q, reply) => { if (e instanceof HttpError) return reply.code(e.status).send({ error: e.code, message: e.message }); const c = e as any; if (c.code && typeof c.code === 'string' && !c.statusCode) return reply.code(502).send({ error: c.code, message: c.message }); console.error(e); return reply.code(c.statusCode ?? 500).send({ error: 'server', message: 'The server failed. Try again.' }); });
   const did = (q: FastifyRequest) => { const t = verifyPrivy(q.headers.authorization?.replace(/^Bearer /, ''), d.config.privyAppId, d.config.privyKey); if (!t) throw new HttpError(401, 'signed_out', 'Sign in again.'); return t; };
   const sponsor = () => { if (!d.sponsor) throw new HttpError(503, 'no_sponsor', 'New accounts are closed right now.'); return d.sponsor; };
@@ -21,7 +29,13 @@ export function buildApp(d: Deps) {
     if (health && Date.now() - health.at < 5_000) return health.body;
     const safe = async <T>(f: () => Promise<T>) => { try { return await f(); } catch { return null; } };
     const [l1Slot, erSlot, bal, house] = await Promise.all([safe(() => d.l1.slot()), safe(() => d.er.slot()), safe(() => d.l1.balance(d.config.sponsor?.address ?? '')), safe(async () => decodeHouse((await d.er.account(addr.house()))!.data))]);
-    const body = { ok: l1Slot !== null && erSlot !== null && !!house && !house.paused, program: REALM, l1: { up: l1Slot !== null, slot: l1Slot }, rollup: { up: erSlot !== null, slot: erSlot, url: d.config.er }, paused: house?.paused ?? null, sponsor: { address: d.config.sponsor?.address ?? null, sol: bal === null ? null : Number(bal) / 1e9, faucet: bal !== null && bal > FAUCET_FLOOR, accounts: bal !== null && bal > SETUP_FLOOR }, keeper: d.keeper?.status ?? null, books: d.keeper?.books ?? null, indexer: d.indexer?.status ?? null, market: d.market?.status ?? null, hosts: d.hosts?.status() ?? null, vault_chips: house ? Number(house.vault / CHIP) : null, players: await d.store.count() };
+    const now = Date.now(), alerts: string[] = [];
+    if (l1Slot === null) alerts.push('Solana (L1) is not answering'); if (erSlot === null) alerts.push('the rollup is not answering'); if (house?.paused) alerts.push('the house is paused');
+    if (bal !== null && bal < 2_000_000_000n) alerts.push(`the sponsor is low: ${(Number(bal) / 1e9).toFixed(2)} SOL`);
+    if (d.keeper && now - d.keeper.status.at > 120_000) alerts.push('the keeper has not run for 2 minutes'); if (d.keeper?.books && !d.keeper.books.ok) alerts.push('the books do not balance');
+    if (d.market?.status.running && now - d.market.status.at > 30_000) alerts.push('the BTC market keeper has not run for 30 seconds'); if (d.market?.status.running && !d.market.status.enabled) alerts.push('the BTC market is switched off');
+    if (d.indexer && !d.indexer.status.connected) alerts.push('the indexer is not connected'); if (d.hosts && !d.hosts.status().running) alerts.push('the AI hosts are not running');
+    const body = { ok: l1Slot !== null && erSlot !== null && !!house && !house.paused, alerts, program: REALM, l1: { up: l1Slot !== null, slot: l1Slot }, rollup: { up: erSlot !== null, slot: erSlot, url: d.config.er }, paused: house?.paused ?? null, sponsor: { address: d.config.sponsor?.address ?? null, sol: bal === null ? null : Number(bal) / 1e9, faucet: bal !== null && bal > FAUCET_FLOOR, accounts: bal !== null && bal > SETUP_FLOOR }, keeper: d.keeper?.status ?? null, books: d.keeper?.books ?? null, indexer: d.indexer?.status ?? null, market: d.market?.status ?? null, hosts: d.hosts?.status() ?? null, vault_chips: house ? Number(house.vault / CHIP) : null, players: await d.store.count() };
     health = { at: Date.now(), body }; return body;
   });
   app.get('/me', async (q) => { const r = await d.store.byDid(did(q)); return r ? { wallet: r.wallet, name: r.name, avatar: r.avatar } : { wallet: null, name: null, avatar: null }; });
@@ -96,7 +110,7 @@ export function buildApp(d: Deps) {
   app.get('/banners/:sha', async (q, reply) => { const b = await d.store.banner(String((q.params as any).sha)); if (!b) throw new HttpError(404, 'not_found', 'No such banner.'); return reply.header('content-type', b.mime).header('cache-control', 'public, max-age=31536000, immutable').header('x-content-type-options', 'nosniff').header('content-security-policy', "default-src 'none'").send(b.bytes); });
   /** taking down what should not be there: ADMIN_TOKEN, from a script */
   app.post('/admin/campaigns/:id/hide', async (q) => {
-    const token = process.env.ADMIN_TOKEN; if (!token || q.headers['x-admin-token'] !== token) throw new HttpError(403, 'not_allowed', 'No.');
+    const token = process.env.ADMIN_TOKEN ?? '', got = Buffer.from(String(q.headers['x-admin-token'] ?? '')); if (token.length < 24 || got.length !== Buffer.byteLength(token) || !timingSafeEqual(got, Buffer.from(token))) throw new HttpError(403, 'not_allowed', 'No.');
     const what = (q.body as any)?.what === 'all' ? 'all' : 'banner'; return { ok: await d.store.hideDetails(Number((q.params as any).id), what), what };
   });
   /** the player opens a social or project task: the visit starts */
