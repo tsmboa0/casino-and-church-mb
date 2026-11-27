@@ -1,22 +1,22 @@
 # The Casino & The Church
 
-> A pixel RPG on NEAR testnet. Crypto's two cultures are two realms: the Casino (LUCK, on-chain games) and the
-> Church (FAITH, tithes, quests). Staying in one drains the other, so balance is survival. Every chip and bet lives in
-> one NEAR contract; two AI hosts on NEAR AI Cloud run the house with signed decisions; a BTC UP/DOWN market is priced
-> by an OutLayer TEE oracle. Play money only.
+> A pixel RPG on Solana devnet, played on a MagicBlock Ephemeral Rollup. Crypto's two cultures are two realms: the
+> Casino (LUCK, games) and the Church (FAITH, tithes, quests, campaigns). Staying in one drains the other, so balance
+> is survival. Every bet settles on the rollup in about a second with no wallet popup; every outcome comes from
+> MagicBlock VRF; a BTC UP/DOWN market is priced from Pyth Lazer; two AI hosts on NEAR AI Cloud run the house with
+> signed decisions anchored on Solana. Play money only.
 
-Live game: https://casino-and-church.vercel.app
-Contract: realm.casinonchurch.testnet (NEAR testnet)
-API health: https://server-production-d070a910.up.railway.app/healthz
+Live game: https://casino-and-church-mb.vercel.app
+Program: 6uoz1h2ZWQMgniDx2vKEvh6bHtgCoFoGegfVtNW1q6cX (Solana devnet); rollup https://devnet-eu.magicblock.app
+API health: https://server-production-41bf466c.up.railway.app/healthz
 Start here: AGENT_README.md (what was built, claim-to-code map), then AGENTS.md (step-by-step testing guide)
-Repository: https://github.com/tsmboa0/casino-and-church
 
 ## Quick start for agents
 
-- Offline demo, no account, straight into the world: https://casino-and-church.vercel.app/?demo=1&agent=1
-- Open one place directly: add &play=<place>, e.g. https://casino-and-church.vercel.app/?demo=1&agent=1&play=market
-- Real on-chain game: https://casino-and-church.vercel.app/?agent=1 then SIGN UP (username, password of 10+
-  characters, typed twice), pick a character. 30 welcome chips arrive on chain in a few seconds.
+- Offline demo, no account, straight into the world: https://casino-and-church-mb.vercel.app/?demo=1&agent=1
+- Open one place directly: add &play=<place>, e.g. https://casino-and-church-mb.vercel.app/?demo=1&agent=1&play=market
+- Real on-chain game: https://casino-and-church-mb.vercel.app/?agent=1, press PLAY, sign in with Privy (email or
+  social), choose a name and a character. 30 welcome bonus chips arrive in a few seconds.
 
 URL parameters: agent=1 (no splash, no backstory, no tours, no music) · demo=1 (offline demo) · play=<place>.
 
@@ -24,7 +24,7 @@ URL parameters: agent=1 (no splash, no backstory, no tours, no music) · demo=1 
 
 Every panel is HTML. Use the Places button (map icon, #btn-places) or the page API:
 
-- cnc.state(): mode, signedIn, profile, realm, chips, luck, faith, panelOpen, panelTitle
+- cnc.state(): mode, signedIn, profile, realm, chips, bonus, luck, faith, panelOpen, panelTitle
 - cnc.places(): every location as {id, kind, label, realm}
 - cnc.go('<place>'): go there and open it
 - cnc.close(): close the open panel (Escape does too)
@@ -33,15 +33,15 @@ Places: cashier, slots-west, slots-east, wheel, market (BTC), blackjack, roulett
 npc-owner (Don Fortuna), harmony, board, altar, missions, candles, offering, confessional, ledger, commission,
 npc-priest (Father Nakamoto). Aliases: btc, don, priest, desk, quests.
 
-Panels: #modal .gm[role=dialog], title in .gm-title span. Results: #res[role=status], with an explorer link on the
-live game. Toasts: #toasts[role=log].
+Panels: #modal .gm[role=dialog], title in .gm-title span. Results: #res[role=status], with VIEW ON EXPLORER and
+VERIFY THIS BET on the live game. Toasts: #toasts[role=log].
 
 ## Facts worth knowing
 
-- 1 chip = 0.01 NEAR. Casino bets are 10 chips. Cashier: GET FREE TEST NEAR (or FUND WALLET to send your own
-  testnet NEAR to your account), then BUY CHIPS. Your account address is also in Settings, with a copy button.
-- Bets are gasless meta-transactions (NEP-366). Games are commit-reveal: the dealer commits before you bet.
-- BTC Exchange: 1-minute rounds, 1.9x on the right call, a tie refunds; prices from the OutLayer TEE oracle.
-- AI hosts decide every 10 minutes; each decision is signed and its hash anchored on chain (verify on the board).
-- Accounts: the password never leaves the browser; the server keeps only a hash and a sealed wallet copy.
+- 1 chip = 0.001 SOL. Casino bets are 10 chips. Cashier: GET FREE TEST SOL, then BUY CHIPS; CASH OUT returns SOL.
+- Bonus chips (welcome, wheels, quests, alms) are spent first and can't be cashed out; what they win is real.
+- BTC Exchange: 1-minute rounds, 1.9x on the right call, a tie refunds; a round with no fresh price is voided and refunded.
+- Quest Board: a book, one quest per page. Commission Desk: campaigns lock their rewards up front (at least 500, 1,000
+  or 200 chips for social, project or machine), run 1 to 30 days, and refund what isn't won.
+- AI hosts decide every 10 minutes; each decision is signed in a TEE and its hash written on Solana (verify on the board).
 - Run locally: pnpm install && pnpm dev (offline demo with placeholder art); pnpm test runs every test suite.

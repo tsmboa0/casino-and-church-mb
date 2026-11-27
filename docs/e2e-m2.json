@@ -1,16 +1,16 @@
 {
- "at": "2026-11-25T11:03:06.535Z",
+ "at": "2026-11-27T07:08:03.550Z",
  "checks": {
   "setup in one transaction": {
    "pass": true,
    "info": {
     "bytes": 744,
-    "ms": 1210,
-    "onRollupMs": 609,
+    "ms": 1272,
+    "onRollupMs": 665,
     "sponsorLamports": "12221760"
    }
   },
-  "welcome chips with the session key": {
+  "welcome: 30 bonus chips with the session key": {
    "pass": true,
    "info": ""
   },
@@ -30,16 +30,14 @@
    "pass": true,
    "info": ""
   },
-  "a wallet with 0 SOL cashes out": {
+  "bonus chips cannot be cashed out": {
    "pass": true,
-   "info": {
-    "ms": 1557
-   }
+   "info": "NoChips"
   },
   "buy 50 chips, credited": {
    "pass": true,
    "info": {
-    "ms": 1064
+    "ms": 1029
    }
   },
   "syncing again credits nothing": {
@@ -141,17 +139,17 @@
   "I1 rollup books balance": {
    "pass": true,
    "info": {
-    "owed": "5510000000",
-    "credited": "5560000000",
-    "withdrawn": "50000000"
+    "owed": "16216000000",
+    "credited": "45013000000",
+    "withdrawn": "28797000000"
    }
   },
   "I2 bank holds what it should": {
    "pass": true,
    "info": {
-    "bank": 5510858520,
-    "deposited": "5560000000",
-    "paid": "50000000"
+    "bank": 16216858520,
+    "deposited": "45013000000",
+    "paid": "28797000000"
    }
   },
   "I3 nothing credited or paid ahead": {

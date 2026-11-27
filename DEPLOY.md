@@ -1,130 +1,87 @@
-# Testnet deploy
+# Deploy
 
-Nothing here creates an account or sends a transaction. Run it only after the four accounts exist and the admin account holds the NEAR that `seed.sh` attaches. The network is testnet. Do not point any of this at mainnet.
+Solana **devnet** and the MagicBlock EU devnet rollup. Never point any of this at mainnet.
 
-The installed CLI is near-cli-rs 0.31.1. Argument order matters. `sign-as` comes before `network-config` on a function call. `deploy` does not take `sign-as`: it signs with the key already saved for the contract account.
+## What runs where
+
+| Part | Where | Notes |
+|---|---|---|
+| Program `realm` | Solana devnet, `6uoz1h2ZWQMgniDx2vKEvh6bHtgCoFoGegfVtNW1q6cX` | Shared accounts delegated to `https://devnet-eu.magicblock.app` |
+| Server | Railway, project `casino-and-church-mb`, service `server`, with Postgres | `railway.json`; `pnpm start` runs `apps/server/src/solana/index.ts` |
+| Client | Vercel, project `casino-and-church-mb` | Built locally (the licensed art is not in git), then deployed as static files |
 
 ## Toolchain
 
-- Rust 1.95 with the `wasm32-unknown-unknown` target. `contracts/realm/rust-toolchain.toml` pins it, and cargo only sees that file when run from inside `contracts/realm` or a child directory.
-- Node 24 and pnpm 10.
-- near-cli-rs 0.31.1 (`near --version`).
-
-## Accounts
-
-Replace `you` with the prefix. Every account is on testnet.
-
-| Account | Role |
-| --- | --- |
-| `you.testnet` | Faucet parent. It only creates the four children. |
-| `realm.you.testnet` | The contract. |
-| `boss.you.testnet` | Dealer and owner agent (Don Fortuna). |
-| `relayer.you.testnet` | Signs delegate transactions and pays gas. |
-| `admin.you.testnet` | Seeds the pools. It must hold the NEAR being attached. |
-
-Full demo, about 545 NEAR:
-
-| Use | NEAR |
-| --- | --- |
-| Vault | 400 |
-| Treasury | 30 |
-| Jackpot | 25 |
-| Relayer (account creation and gas) | 60 |
-| Boss | 10 |
-| Contract storage reserve | 20 |
-
-If the faucet cannot supply that, seed a smaller first table instead: vault 20, treasury 2, jackpot 1. Give the admin account those 23 NEAR plus a little gas, the relayer 15, the boss 2, and the contract 10. If even that is tight, set `chip_yocto` to `1000000000000000000000` (`10^21`) in the init JSON and tell the design agent to set `CHIPS_PER_NEAR = 1000` in `rules.ts`. The chip counts in the UI stay the same; one chip becomes 0.001 NEAR.
-
-## Create the accounts
-
-Parent, from the faucet:
-
-```bash
-near account create-account sponsor-by-faucet-service you.testnet \
-  autogenerate-new-keypair save-to-keychain network-config testnet create
-```
-
-Children. The amount is one argument, including the space and the word NEAR:
-
-```bash
-near account create-account fund-myself realm.you.testnet '10 NEAR' \
-  autogenerate-new-keypair save-to-keychain sign-as you.testnet \
-  network-config testnet sign-with-keychain send
-near account create-account fund-myself boss.you.testnet '10 NEAR' \
-  autogenerate-new-keypair save-to-keychain sign-as you.testnet \
-  network-config testnet sign-with-keychain send
-near account create-account fund-myself relayer.you.testnet '60 NEAR' \
-  autogenerate-new-keypair save-to-keychain sign-as you.testnet \
-  network-config testnet sign-with-keychain send
-near account create-account fund-myself admin.you.testnet '460 NEAR' \
-  autogenerate-new-keypair save-to-keychain sign-as you.testnet \
-  network-config testnet sign-with-keychain send
-```
-
-Shrink those amounts to the small table above if the faucet parent cannot fund them. The admin account pays the seed, so it needs the vault, treasury, and jackpot amounts, not a leftover 1 NEAR.
-
-## Deploy and seed
-
-```bash
-NEAR_ACCOUNT_PREFIX=you ./scripts/deploy.sh
-REALM_CONTRACT=realm.you.testnet ADMIN_ACCOUNT=admin.you.testnet ./scripts/seed.sh
-```
-
-The deploy init patch sets `luck_per_chip_milli` to 80, candle cooldown to 15 seconds, and Harmony cooldown to 120 seconds. 80 is the demo value. `packages/sim/report.json` runs 200,000 coin bets of 100 chips and then the wheel: the vault ends at −290,953 chips at 80 and +85,338 chips at 40. 40 is the value for anything that is not this demo.
-
-A smaller first seed:
-
-```bash
-REALM_CONTRACT=realm.you.testnet ADMIN_ACCOUNT=admin.you.testnet \
-  SEED_VAULT_NEAR=20 SEED_TREASURY_NEAR=2 SEED_JACKPOT_NEAR=1 ./scripts/seed.sh
-```
-
-`seed.sh` signs as `ADMIN_ACCOUNT`. The admin account must hold the attached NEAR. Seeding is admin-only.
+- Node 22+ and pnpm 10.
+- Rust 1.89 and Anchor 1.0.2 (`RUSTUP_TOOLCHAIN=1.89.0`). Build with `anchor build --no-idl --ignore-keys`, then delete
+  `target/deploy/realm-keypair.json` and check the binary contains the program id. Regenerate the IDL with
+  `anchor idl build -p realm -o target/idl/realm.json` and `node packages/realm/scripts/idl.mjs`.
+- Solana CLI for deploys and transfers.
 
 ## Keys
 
-The relayer signs a delegate action to a guest account and also transfers NEAR. A function-call key cannot do that, so the eight relayer keys are full-access keys. The four dealer keys are function-call keys on the realm, limited to `reveal`, `commit_batch`, `blackjack_show`, `set_params`, and `grant_promo`. No allowance is set, so they spend the boss account balance rather than a capped key budget.
+Local keys live in `~/.config/casino-mb/devnet/` (never in git): `admin` (program upgrade authority and config),
+`sponsor` (pays player set-up and the faucet), `keeper` (market backup, cash-outs, refunds; the key the program knows
+as the market's keeper), `oracle` (the Church oracle's co-signature), `fortuna` and `nakamoto` (the AI hosts).
 
-Print each secret and put it in `.env`. Do not paste secrets into chat. Repeat the relayer command eight times and the dealer command four times, then join the printed `ed25519:` secrets with commas.
-
-```bash
-near account add-key relayer.you.testnet grant-full-access \
-  autogenerate-new-keypair print-to-terminal \
-  network-config testnet sign-with-keychain send
-
-near account add-key boss.you.testnet grant-function-call-access \
-  --contract-account-id realm.you.testnet \
-  --function-names reveal,commit_batch,blackjack_show,set_params,grant_promo \
-  autogenerate-new-keypair print-to-terminal \
-  network-config testnet sign-with-keychain send
-```
-
-`DEALER_ENC_KEY` is 64 hex characters of your own random data (`openssl rand -hex 32`). It encrypts the server seeds in Postgres. Losing it makes the committed seeds unrevealable.
-
-## Database
-
-Neon is the plan's free-tier database. A Supabase Postgres URI is accepted when it is the direct connection or the session pooler on port **5432**. Port 6543 (transaction mode) cannot take the dealer's advisory lock (`pg_try_advisory_lock(8675309)`), so the server would refuse to start the dealer. The URI must include `sslmode=require`. The server strips that parameter and turns certificate verification off, which is what node-pg needs for Neon and Supabase certificates. The server applies `apps/server/sql/001_init.sql` on startup, including the history columns, so the database only has to be empty and the role has to be able to create tables.
-
-## Run
+On Railway, each is a variable holding the key as a JSON array: `SPONSOR_KEY`, `KEEPER_KEY`, `ORACLE_KEY`,
+`FORTUNA_KEY`, `NAKAMOTO_KEY`. Set them from the files so they never pass through a terminal or a chat:
 
 ```bash
-pnpm --filter server dev
+K=~/.config/casino-mb/devnet
+railway variables --service server --skip-deploys --set "SPONSOR_KEY=$(tr -d '\n ' < $K/sponsor.json)"   # and so on
 ```
 
-One dealer process per contract. A second process fails the advisory lock and stays a relayer only.
+## Server variables
 
-Host the server on Fly.io or Railway. Host the client on Vercel or Cloudflare Pages with `VITE_BACKEND=chain`, `VITE_API_URL` pointing at the server, and `VITE_REALM_CONTRACT` set. `CLIENT_ORIGIN` on the server must be that client origin.
+| Variable | |
+|---|---|
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (Railway reference) |
+| `CLIENT_ORIGIN` | the site, comma-separated with any others (CORS) |
+| `NEARAI_API_KEY`, `NEARAI_MODEL`, `NEARAI_DAILY_TOKEN_CAP` | the AI hosts |
+| `ADMIN_TOKEN` | at least 24 characters; for taking a campaign down (`scripts/solana/takedown.ts`) |
+| `TRUST_PROXY_HOPS` | `1` on Railway: the client IP is the one Railway's proxy saw |
+| `ALERT_WEBHOOK` | optional Discord or Slack webhook: the server posts when `/healthz` alerts start or clear |
+| `HOSTS=0`, `MARKET_KEEPER=0` | switch those parts off (for a second instance) |
+| `REQS_PER_MIN`, `POSTS_PER_MIN` | the per-network request ceiling (2,400 and 240) |
 
-`DEALER_CONCURRENCY` defaults to the number of dealer keys (4). Raise it only if you add keys.
+Run **one** server per program. A second one would run the keepers and the hosts twice.
 
-A load test from one machine needs `ACCOUNTS_PER_IP_DAY` above 20 (for example 30) and `RELAY_ACCOUNT_HOUR` left at 120 or raised. The production defaults stay 3 accounts per IP per day and 120 relays per account per hour. Do not raise them on the public server and leave them there.
+## Deploying
 
-## Proof
+```bash
+# server
+railway up --service server --detach
 
-After the server is up, these are the checks that still need the live deployment:
+# client
+cd apps/client && VITE_API_URL=https://server-production-41bf466c.up.railway.app npx vite build --outDir ../../spike/target/site --emptyOutDir
+cd ../../spike/target/site && npx vercel deploy --prod --yes
+```
 
-- `GET /healthz` returns `ok: true`, `commits_available` at least 150, `relayer_balance` above 50 NEAR, and `block_height_lag` under 5.
-- `pnpm exec tsx scripts/e2e.mjs` twice, back to back, with `REALM_CONTRACT` and `E2E_API` set. Each run writes `packages/sim/e2e-report.json`. Commit that file only after a real run. A skipped run does not write it.
-- Optionally `LOAD=1 pnpm exec tsx scripts/load.mjs` for five minutes. It reports p50, p95, max settle time, nonce errors, quota rejections, timeouts, and vault drift.
+The site folder also holds a `vercel.json` (security headers) and a `.vercelignore` (`.env.local`, `.vercel`).
+After a new site domain, add it to `CLIENT_ORIGIN` on Railway and to the allowed domains in the Privy dashboard.
 
-`node scripts/e2e.mjs` and `node scripts/load.mjs` exit 0 with no secrets, which is what CI runs.
+## A fresh program (first time only)
+
+`scripts/solana/init.ts` sets up the config, bank, house, market, plots and boards, funds the pools, delegates the
+shared accounts and starts the market and its crank (safe to run again). `scripts/solana/church.ts` seeds the Church's
+campaigns.
+
+## Upgrading the program
+
+Pause, upgrade, check, unpause. Never change the layout of a delegated account except through its spare bytes.
+Deploy through a buffer:
+
+```bash
+solana program deploy target/deploy/realm.so --buffer ~/.config/casino-mb/devnet/realm-buffer.json \
+  --program-id ~/.config/casino-mb/devnet/realm-program.json --upgrade-authority ~/.config/casino-mb/devnet/admin.json \
+  -u https://rpc.magicblock.app/devnet --use-rpc --with-compute-unit-price 20000 --max-sign-attempts 30
+```
+
+## Launch checks
+
+- `GET /healthz`: `ok: true`, `alerts: []` (the sponsor needs at least 2 SOL).
+- `scripts/solana/e2e.ts` twice: 35 checks each.
+- `scripts/solana/load.ts`: 30 players at once.
+- `scripts/ui/prod.ts`: the live site and API from outside.
+- After any test run, `scripts/solana/sweep.ts` brings the test wallets' SOL home.

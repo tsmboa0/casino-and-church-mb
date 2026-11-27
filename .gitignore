@@ -14,3 +14,4 @@ target/
 # working plans: kept on this machine only
 /*PLAN.md
 apps/server/.data/
+apps/server/seed/
