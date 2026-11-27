@@ -15,7 +15,7 @@
 ![AI](https://img.shields.io/badge/AI%20hosts-NEAR%20AI%20Cloud%20(TEE)-111)
 ![Tests](https://img.shields.io/badge/tests-55%20program%20%C2%B7%2042%20server%20%C2%B7%201005%20vectors-2ea44f)
 
-[Play](https://casino-and-church-mb.vercel.app) · [Backstory](#the-backstory) · [Game loop](#the-game-loop) · [The Casino](#the-casino) · [The Church](#the-church) · [Why MagicBlock](#why-magicblock) · [Architecture](#architecture) · [Verify it](#verify-it-yourself) · [For AI judges](#for-ai-judges-and-testers)
+[Play](https://casino-and-church-mb.vercel.app) · [Backstory](#the-backstory) · [Game loop](#the-game-loop) · [The Casino](#the-casino) · [The Church](#the-church) · [Why MagicBlock](#why-magicblock) · [Architecture](#architecture) · [Verify it](#verify-it-yourself) · [On-chain proof](#on-chain-proof) · [For AI judges](#for-ai-judges-and-testers)
 
 #### **The Casino & The Church is a 2D pixel-art RPG about the two cultures of crypto, played on Solana through a MagicBlock Ephemeral Rollup.**
 
@@ -243,6 +243,107 @@ pnpm test        # shared + server + simulation vectors + program tests + both t
 | A bet | Result card → **VERIFY THIS BET** recomputes it from the VRF output |
 | A host decision | Crossroads board → **VERIFY A REAL DECISION**: the enclave signature, the attestation, and the hash on Solana |
 | A BTC round | BTC Exchange → **PAST ROUNDS**: each round's prices and its record on L1 |
+
+---
+
+## On-chain proof
+
+Everything below is on **Solana devnet** or on its **MagicBlock Ephemeral Rollup** (`https://devnet-eu.magicblock.app`, EU). Rollup links open the Solana Explorer pointed at the rollup. Each transaction is a real, successful one from the live game, found by reading the chain (`scripts/solana/proofs.ts`).
+
+### Addresses
+
+| What | Address |
+|---|---|
+| **Program** `realm` (Anchor) | [`6uoz1h2ZWQMgniDx2vKEvh6bHtgCoFoGegfVtNW1q6cX`](https://explorer.solana.com/address/6uoz1h2ZWQMgniDx2vKEvh6bHtgCoFoGegfVtNW1q6cX?cluster=devnet) |
+| Config (keys, the crank, the price feed) | [`GLbhFunUT1Eo57LPiMU7BBgBcM59sB6wpmkYaKABJVGr`](https://explorer.solana.com/address/GLbhFunUT1Eo57LPiMU7BBgBcM59sB6wpmkYaKABJVGr?cluster=devnet) |
+| Bank (the SOL behind every chip, L1) | [`4QPdGu5d54EXvsYj7R86tjD7ufRGFQjuGZDNwfWfnEkD`](https://explorer.solana.com/address/4QPdGu5d54EXvsYj7R86tjD7ufRGFQjuGZDNwfWfnEkD?cluster=devnet) |
+| House purse (L1) | [`EKwRcBxxQG2ef3xnvW2zFrbBMfuvVQUWVeHtVCfxCTT2`](https://explorer.solana.com/address/EKwRcBxxQG2ef3xnvW2zFrbBMfuvVQUWVeHtVCfxCTT2?cluster=devnet) |
+| House (vault, treasury, jackpot, the hosts' limits; on the rollup) | [`EumcePdDA5ukGVb2p43R68pKyMDjxDBvFMV5y9nNfPKB`](https://explorer.solana.com/address/EumcePdDA5ukGVb2p43R68pKyMDjxDBvFMV5y9nNfPKB?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+| BTC market (rounds, bets; on the rollup) | [`96KC1FNjqA3fLgde1Bj3Ky6qCWsDVK74gMxVuW17bWZ4`](https://explorer.solana.com/address/96KC1FNjqA3fLgde1Bj3Ky6qCWsDVK74gMxVuW17bWZ4?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+| Founders' Row plots (on the rollup) | [`F4wrYZVgvP67pDbqPhzDRuUgDDoTZ2zyTCVrqmL3ocEf`](https://explorer.solana.com/address/F4wrYZVgvP67pDbqPhzDRuUgDDoTZ2zyTCVrqmL3ocEf?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+| Quest boards 1 and 2 (campaigns; on the rollup) | [`A86fLwGwkBWko4DGvR2MrLSvcnY7GtdsXv6D1PMpKyaL`](https://explorer.solana.com/address/A86fLwGwkBWko4DGvR2MrLSvcnY7GtdsXv6D1PMpKyaL?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app)<br>[`FZABPZwVjKWFUcvkuEBqwsgtPCCWTBF813vhARmygNrW`](https://explorer.solana.com/address/FZABPZwVjKWFUcvkuEBqwsgtPCCWTBF813vhARmygNrW?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+| AI host decisions log (L1) | [`HjmzzBabGHt9MYXdnbtyRwdrEFWCVMUvAKeVq49bp8Xr`](https://explorer.solana.com/address/HjmzzBabGHt9MYXdnbtyRwdrEFWCVMUvAKeVq49bp8Xr?cluster=devnet) |
+| BTC market crank (MagicBlock Hydra) | [`E2VkVcCoEbRWZhhkz1EZFRTEUPk4whPJ2XnUMYVPUtEk`](https://explorer.solana.com/address/E2VkVcCoEbRWZhhkz1EZFRTEUPk4whPJ2XnUMYVPUtEk?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+| Market's delegated fee payer | [`5oxMeptH3GeWcqWFfD5aF1qYq3CG1fwHaQBhSi9bja5Y`](https://explorer.solana.com/address/5oxMeptH3GeWcqWFfD5aF1qYq3CG1fwHaQBhSi9bja5Y?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+| Sponsor (pays player setup and the faucet) | [`NRYhJkKW4mqjh4dih9S2euJV6mfD2oJZzzFekbcFmpF`](https://explorer.solana.com/address/NRYhJkKW4mqjh4dih9S2euJV6mfD2oJZzzFekbcFmpF?cluster=devnet) |
+| Keeper · Church oracle | [`FmKgG8Xfh2L8T2MdknbEFda4CTfdK3vUowbLH8G4ibpj`](https://explorer.solana.com/address/FmKgG8Xfh2L8T2MdknbEFda4CTfdK3vUowbLH8G4ibpj?cluster=devnet)<br>[`AbCpVepM2CkwRjsX2n7WkVcDV24DJvLb6oussVTP7WiD`](https://explorer.solana.com/address/AbCpVepM2CkwRjsX2n7WkVcDV24DJvLb6oussVTP7WiD?cluster=devnet) |
+| AI hosts: Don Fortuna · Father Nakamoto | [`G2gYPd5ZFKGSfZf5pV8D3bQ6i1gDJ3iF5z9KrnkK8FNR`](https://explorer.solana.com/address/G2gYPd5ZFKGSfZf5pV8D3bQ6i1gDJ3iF5z9KrnkK8FNR?cluster=devnet)<br>[`GjWxuVjM7PBTct7fKQNAtWtamo7PTqBbNsJL4nsNwVjF`](https://explorer.solana.com/address/GjWxuVjM7PBTct7fKQNAtWtamo7PTqBbNsJL4nsNwVjF?cluster=devnet) |
+| Pyth Lazer BTC/USD feed | [`71wtTRDY8Gxgw56bXFt2oc6qeAbTxzStdNiC425Z51sr`](https://explorer.solana.com/address/71wtTRDY8Gxgw56bXFt2oc6qeAbTxzStdNiC425Z51sr?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+| MagicBlock: EU validator · magic fee vault | `MEUGGrYPxKk17hCr7wpT6s8dtNokZj5U2L57vjYMS8e`<br>[`ByZyZ6322wnM48vn1kVdrsGRLjiLU15t2gJUBdXL4MQb`](https://explorer.solana.com/address/ByZyZ6322wnM48vn1kVdrsGRLjiLU15t2gJUBdXL4MQb?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+| MagicBlock: delegation · VRF · Hydra (crank) · session keys | `DELeGGvXpWV2fqJUhqcF5ZSYMS4JTLjteaAMARRSaeSh`<br>`Vrf1RNUjXmQGjmQrQLvJHs9SNkvDJEsRVFPkfSQUwGz`<br>`eHyd5BU8QffvHi4GnXwxrK4WpS7pM2x9UGKHBWii7mf`<br>`KeyspM2ssCJbqUhQ4k7sveSiY4WjnYsrXkC8oDbwde5` |
+
+### Casino: every game, settled by MagicBlock VRF
+
+Each settlement is the VRF callback: the random number arrives, the program computes the outcome and pays in the same transaction.
+
+| Game | Transaction | Layer |
+|---|---|---|
+| A bet placed (stake reserved, randomness requested) | [`3mekfKqK…`](https://explorer.solana.com/tx/3mekfKqKYeTigouScy73DWarGH7TJo7GCm43kBnr3iHmb81U6Jier4Y87szMz8FkoQvNAAwrfn82dLVJSsa4hDi1?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Slots (settled) | [`3oy3FD1w…`](https://explorer.solana.com/tx/3oy3FD1wJAa7F6SAmKVsaZLM6514S4aAen7TjGDPnXzd6pdQDAmXprjMH4pJjzBbv1aPKg9Rkp9Y1xC5iMps37yk?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Coin Flip (settled) | [`3HP3TnrP…`](https://explorer.solana.com/tx/3HP3TnrPBzYWV9y8oEfgAaxLH4k7wfb2Nz7EnVtmn6ZCjhAgibuvJU5E8egfpT73C3wSJ4znGrmzKApukBDVg4QD?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Dice (settled) | [`YycgqiTk…`](https://explorer.solana.com/tx/YycgqiTkcCE2NYZbNtUfQqBUL4kC66UTuL3tm1Lf59ez2BodzBHYHSpHmHwDLQuJ9WjJoa5qrWZKPWFvBo5iaEA?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Roulette (settled) | [`3oyFzgGw…`](https://explorer.solana.com/tx/3oyFzgGwXjBBrmzvBv5rmjvKPy3mRNGiSYjwpg9kcZctroW5eZwaiJWzeR31J2q8f7f2HK2vr7rYFTNwSZ9CwAAU?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Blackjack: deal | [`4kgAXzem…`](https://explorer.solana.com/tx/4kgAXzemt3VhZKxVcjpusfDs2X5ikQ1uiwbMEQee7VkE9eTxmLxKgKaqcJY8ErMdQjZLokawXeokJg6ApoUKEsgd?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Blackjack: hit / stand / double | [`4XTFVebx…`](https://explorer.solana.com/tx/4XTFVebx83p6uHKzhCzbGUeJoNyPHfGZZLVrQRVL2n97ZRSMcKcRCzHZ5AnimVNvPaFR3Ui3xvH8Mhyom9VYKa5x?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Blackjack: dealer's hand, settled | [`4Zfk3vyQ…`](https://explorer.solana.com/tx/4Zfk3vyQt7WFw9vRht1hrDAfDZoLo1Wbjz4aoDBvyzixgqiRFnEE7MBi3KoVuh8RxesX18n1e1BqpDcP5hArPkDb?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Wheel of Fortune (settled) | [`25A2thzw…`](https://explorer.solana.com/tx/25A2thzwEUtZB1Nr37anzHmUoPzotV2Xj8FwV6QobsDTu8m7LtKEvaH12Y2yvG4HNkSn1PE9WaD77vJ4iX8oah5W?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Harmony Wheel (settled) | [`2gFnWZzL…`](https://explorer.solana.com/tx/2gFnWZzLp7Wxc2K1c9hXWdwFzdd12MkwVmdTdguD8g6dJTHuCn1KrNTUsSRpQib7QtF7QbN1QUpL5JZwm3JA7KJB?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Founders' Row: claim a plot | [`3vDALdR8…`](https://explorer.solana.com/tx/3vDALdR8MSAhyQdoegx4XQWxLUSpTUQGNESG6NioWZkycMzEhE72A6i1dvt3M7mrjpv5nB4meqXt1gfhv9Sd3ppN?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Founders' Row: fund the machine | [`4hqF4ToM…`](https://explorer.solana.com/tx/4hqF4ToMqKG4CvgaLSKEaZCiM2tdZj85aadyTU4k9w1ietCTTSZa74YkyY1K96Enk2zqp8Aph55bSavzy6zbwV3o?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Founders' Row: a spin on a player's machine, placed · settled | [`62YEVYG7…`](https://explorer.solana.com/tx/62YEVYG7gT6PDes689zo4LHX9BWG1zfNWpfXQvFMogLJQ2toMi1DTkPMaKLnf1zGBmABbuK9ciPDzQwGdUbA7vcd?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app)<br>[`5MCimzZ9…`](https://explorer.solana.com/tx/5MCimzZ9WHSyzK6bqypM61owRjxV4dboJAguXL6FMPWMbchCfqs4hcvkRbcab2QU7pUQs62Q41HWvb3xcRSJ6jEt?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Founders' Row: close the machine | [`4vA7skVk…`](https://explorer.solana.com/tx/4vA7skVkmnoYgTiactuZy3aeyJu8YPJVYLGvhZVqY47XaFpffQEQ4vS7CE3BMR2fZnrbWxMfV2CvX2vfQMi8nFBp?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+
+### BTC Exchange
+
+| Action | Transaction | Layer |
+|---|---|---|
+| A call (UP or DOWN) on the next round | [`5vNnHG1X…`](https://explorer.solana.com/tx/5vNnHG1XQgPJBv9iGzM4iCo42WmM2xaGTBTYPvPMqWDTtV5W4ry2vhECJm4FBSrsCiPHPirNzTgvcaxgFLFABZ9P?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| The crank closes a round and locks the next (Pyth Lazer price) | [`5oW9Jtyy…`](https://explorer.solana.com/tx/5oW9JtyyYSoHc45WmvntTUBCdWNvhbCKKmxQpF37c9v4RkzmUs4CxUJ6mgqDEyrixCF8Gq9dkkgGQjXKNWpvKmMB?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Winnings paid | [`254ws9fZ…`](https://explorer.solana.com/tx/254ws9fZunykvrCdxtfb2mKURtrUpqiEMX1fspefHs6KxrvtdeDXiND7tKGjGTRNMSBtXKFAc3R85txQh4TjnLMs?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| The market saved to Solana, paid by the delegated fee payer (save 13: past the free 10) | [`5sx84NYQ…`](https://explorer.solana.com/tx/5sx84NYQZtrXdQexC2UyGEirA3Jrn7EibbfYrh1dWsrJokRqRrQ25TwFRbhtyRWP3Faw3AB4bBVWvphFH2A3JJEE?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup → L1 |
+| A page of 60 finished rounds written on L1 | [`3DQLsUcx…`](https://explorer.solana.com/tx/3DQLsUcxRb3esKBKjMkE4wQhV7rzaLLmf27CKb5KKcgvLYRX632nn6zaLJSn7g58TvfApF99EfMfyq6wq8Qm6QEk?cluster=devnet) | L1 |
+
+### Church
+
+| Action | Transaction | Layer |
+|---|---|---|
+| Tithe at the Offering Box | [`59omtj3p…`](https://explorer.solana.com/tx/59omtj3pmX4QdZh4AuWrbCZixLZFwjxc4yqf2HYSFV8fX822Y6H3sHnsNqCSGDncPGUmzk7QDdZ8QHE4AvEXXDNd?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Light a votive candle | [`gcTuo2cp…`](https://explorer.solana.com/tx/gcTuo2cpZMLL4Y25EQbRifH55vFnr6TJGrMojBn2UqWiZdSC4Yt1fus1yse2AVpy2GkGTDsLUy6vn8eeWhbqHQj?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Offer LUCK at the Altar | [`4vqdzZV9…`](https://explorer.solana.com/tx/4vqdzZV9pyTCTTb3Jh3zy4PyoKF5b8uWfDeNwFqQ7r8UyYUUb3wfpqWXmh24MZvqukFAAThV1fDGMW3WB8xfg68Z?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Claim a house quest | [`hEpqYECa…`](https://explorer.solana.com/tx/hEpqYECa4Qq45tPhpBmXZG2fbgkbLCgmNvvFnzbP6RLVqVDY1fG8cd44AxJQexj1MRaKyrtzKJbbTLmsSs1QbKL?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Open a campaign (rewards locked, co-signed by the Church oracle) | [`3Qro5HTg…`](https://explorer.solana.com/tx/3Qro5HTgw4baocHZG9m5wiptEXM4GqSQSF21dB3AN6RxCYjM5ktFA9BhgAXNAuhaCc3HPdattfyaNQdSYaPQ1mgC?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| A Church campaign seeded from the treasury | [`5wDbQ4KA…`](https://explorer.solana.com/tx/5wDbQ4KAb9Bua3ohTq6AneCoaezunfUuWCBEPM9fbPCjSGVtUHjCNsA7xt4NvwHYmxeqvnZong6kwTmNrB1fw1Ah?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Claim a campaign (attested by the Church oracle) | [`2jsDqATh…`](https://explorer.solana.com/tx/2jsDqATh9oeCxhG8FjAFiatptjsgHRYqbzxwCEP6M8StQd7TTaWAzQSXSWZnLS6i8tph2ApJqVpapsZUrPncyMYe?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Close a campaign · collect what was left | [`hKiYmLoy…`](https://explorer.solana.com/tx/hKiYmLoyBbjKdNYx32u1dJ88qJPZmKtPaiaAFKpwaNyM7HPG3XicRXLTSgNnhp8jeNoyw6BHGyxXKmiFVLLgRed?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app)<br>[`4DdEx6Wx…`](https://explorer.solana.com/tx/4DdEx6Wxg9WsAU2cWkDiBbUS4ZCcunUU2RscL5z8ccaM3MdivY9Cc3fVGGSMDG6G568zah2CEwcX6NdECwehaoNA?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+
+### AI hosts: signed in a TEE, anchored on Solana, then acted
+
+Each decision is made by a model on NEAR AI Cloud inside attested hardware, which signs it. Its hash is written on L1 first (`anchor_decision`), then the action runs on the rollup (`host_act`), which checks the hash. The proof holds the model's signature, the attestation and both transactions.
+
+| Host | Signed proof and attestation | Hash anchored on L1 | Action on the rollup |
+|---|---|---|---|
+| Don Fortuna | [proof JSON](https://server-production-41bf466c.up.railway.app/agent/decision/3fe79189-b192-489b-9afc-8e05f4939858/proof) | [`TSrMREao…`](https://explorer.solana.com/tx/TSrMREaoHirWsdpkLt82Q1BJeaDk2397L4U7vAr7mSNARhFyugsZ99LZAp7mzqEtYmwNAm4U4mMHFqTp6QUegNj?cluster=devnet) | [`4HVzFyPr…`](https://explorer.solana.com/tx/4HVzFyPrTiYCHMmp1AAkJU9ufjzf356wCeXS4Lf8mErJLEbxSz41q7bgUKF2iFE5vTUwY7vsA4xZ84MYgxD4FZVK?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+| Father Nakamoto | [proof JSON](https://server-production-41bf466c.up.railway.app/agent/decision/a511e08c-f58a-4cb2-a3da-ca36bd5e44e0/proof) | [`2dp9ATHS…`](https://explorer.solana.com/tx/2dp9ATHSHcHuAdQDFSDJv16Qjaz59YNSSLwQg3daS5RGfwYab52QYnVd8D1KfvJBwKBsMA6xWYQsqvfheczYXWVP?cluster=devnet) | [`PSjQX8z2…`](https://explorer.solana.com/tx/PSjQX8z2rNoKfWnpo5FUEcafkUkjx4XiBm8DrhoMB4L7hXmG9dmH1iKwfUzzn58X7T8DR4Z2sB4nrqKoXQQzPWh?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) |
+
+### Accounts and the Cashier
+
+| Action | Transaction | Layer |
+|---|---|---|
+| A new player: account, delegation to the rollup and session key, in one transaction (paid by the sponsor) | [`aQEJS8nw…`](https://explorer.solana.com/tx/aQEJS8nwaE7PY7kRgFFjnBy6HySqj1FGApz4U6JBD3c5iLtSSgnY9hjrNajBqpTnfWGYcwoMJyzvgeXh3GHZiG6?cluster=devnet) | L1 |
+| 30 welcome bonus chips | [`4cvhdv2T…`](https://explorer.solana.com/tx/4cvhdv2TULU3H267TiTwBprbrspeaipEcpAGdddQ5Sbg78yczqppw2vE7vS5MR5PiiciN3ZAzQ3c2FjggBHC1b3T?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Name and character · walk into a realm | [`4SHiSLF9…`](https://explorer.solana.com/tx/4SHiSLF97HP9UC1TnmqHTsYyvGLhXK3fn6RyZKAFx6WJh31S18YLWLJwEvrWRLuKPWki6MZ9GJGMEjtXzqT7CPmd?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app)<br>[`46aLEjDL…`](https://explorer.solana.com/tx/46aLEjDLBxgwL4aZMQNuDmPDqyomBFEEqKaapg6mo4a4kwcSTPvXjn3inbVq3cb831X5A7qYwjVEacoaopmfGkmL?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Buy chips with SOL | [`5fNd644P…`](https://explorer.solana.com/tx/5fNd644PLEXLkyPzTGS1me9g2Dd83dYUXbw71DEDYiTWyM4vdzyAq4M4dFL6UNsreBuAn932S4PkvreDFi2W5VHf?cluster=devnet) | L1 |
+| The deposit credited on the rollup | [`2GZ48Ekm…`](https://explorer.solana.com/tx/2GZ48EkmbgfnrxxBVBDf9D4rtVdza41Fcm5P6iVCYpVNSzTqcfcdDbvtddn5j41NQWxUUgm1biggXQdBSkxnPF1o?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app) | rollup |
+| Cash out: chips taken on the rollup · SOL paid on L1 | [`5Aph39oq…`](https://explorer.solana.com/tx/5Aph39oqEr2kSmnisU6KEsonx7VdFHLgpkZ2g2YwACQMp62uZGdsYbGgA1x8eejkxC4cSdKtj7EDvWtQDGpParik?cluster=custom&customUrl=https%3A%2F%2Fdevnet-eu.magicblock.app)<br>[`5tZweVKG…`](https://explorer.solana.com/tx/5tZweVKGZEwt6E9TAgrNkJxZrfkot4B8V5sWhzNTeeLFh44TThZhGWHzupmr6p7KotCP6iCoAyMxDtKbh7B8GhJ1?cluster=devnet) | rollup → L1 |
+
+### Setting up the program (one-off)
+
+| Action | Transaction |
+|---|---|
+| Initialise the program | [`2MAAYhJe…`](https://explorer.solana.com/tx/2MAAYhJe1ZJzfHeZBNqAoQh3s1daobxCNTsL3RojhMX35mYJhvPoaSv1Q9UZCUJfu1GMvmJffgUL1yQpLroK7roi?cluster=devnet) |
+| Fund the house | [`3SgizhFf…`](https://explorer.solana.com/tx/3SgizhFfL4UaUSTdWPYV2TxCTMXkScibGkK9F5Drx4TVVS5sFdyqSJ2CDqXvUhQZ6WzR3viQL9VrFevMyci5L3d6?cluster=devnet) |
+| Delegate the house · the market · the plots · a board to the rollup | [`4myduBn5…`](https://explorer.solana.com/tx/4myduBn5kdjoKGWLSX5V8Q2iHE6m5YHmhTXxbRpWjPj7hnTDzaJKKobnxV4y6GscWFZ6XQxrLmJ9iAH7Ex9RJaXx?cluster=devnet)<br>[`59xszRiS…`](https://explorer.solana.com/tx/59xszRiS85cwJxZu15xEzdGtVRASL7FrVLGsjEHn7e2EZn35ygnzGu58CwLPHt2mKAHuGQ9ZBMNGL7ffGa6qShMK?cluster=devnet)<br>[`7h4VF3Xm…`](https://explorer.solana.com/tx/7h4VF3XmuDaqEeFXzcAAP28jfoEi4B9MaRkNib7adsyvKsJ6dr63HeAgADEyex2nWVpFESNL25o4KD3k9M7ZR6g?cluster=devnet)<br>[`3194oYmr…`](https://explorer.solana.com/tx/3194oYmriT6yDRrJj6vcJUmd7tXRw7nRTi1gz1RnU6M9LHmQijFGZc4ACjAKh2sbJgQKzCyTHAuyQKBaAk1CkBTP?cluster=devnet) |
+| Name the crank in the config | [`2EmK4QKs…`](https://explorer.solana.com/tx/2EmK4QKsrmyiLkgTUs7Wrwx6bisVvs9DCQ3ocxYSyNHyphibjNpT8HvhzBz1vcqewpLNnEWGq9GTN79JFCJzmCpE?cluster=devnet) |
 
 ---
 
