@@ -1254,7 +1254,7 @@ function commission(root: Root, close: () => void) {
     const owner = await myOwnerId(); if (tab !== 'new') return;
     const machines = Object.values(store.plots).filter(p => p.mine ?? p.owner === owner);
     pane.innerHTML = `<form class="cd-grid" id="cf" novalidate>
-      <div class="cd-form">
+      <div class="cd-left"><div class="cd-form">
         <section><h4><i>1</i>WHAT KIND OF CAMPAIGN</h4><div class="cd-kinds">${KINDS.map((k, i) => `<button type="button" class="cd-kind ${i === kind ? 'on' : ''}" data-k="${i}" ${i === 2 && !machines.length ? 'disabled' : ''}><b>${k.t}</b><span>${k.d}</span><em>locks at least ${fmt(CAMPAIGN_MIN_BUDGET[i])} chips (${CAMPAIGN_MIN_BUDGET[i] / 1000} SOL)</em>${i === 2 && !machines.length ? '<em class="no">you need a machine on Founders’ Row</em>' : ''}</button>`).join('')}</div></section>
         <section><h4><i>2</i>THE CAMPAIGN PAGE</h4>
           <label class="cd-f"><span>CAMPAIGN TITLE <small>the headline of your page</small></span><input id="ct" data-pv-for="title" maxlength="60" placeholder="Follow Orbit Labs on X" autocomplete="off"></label>
@@ -1274,8 +1274,8 @@ function commission(root: Root, close: () => void) {
           <p class="cd-small">When it ends, or when you close it, what was not won comes back to you.</p></section>
         <section><h4><i>5</i>WHAT IT COSTS</h4><div class="cd-fund" id="fund"></div></section>
       </div>
-      <aside class="cd-side"><div class="g-lab">HOW PLAYERS WILL SEE IT</div><div class="cd-preview" id="pv"></div>
-        <p class="cd-why" id="why"></p><button class="g-go gold wide" type="submit" id="send"><span>LOCK AND PUBLISH</span></button></aside>
+      <div class="cd-foot"><p class="cd-why" id="why"></p><button class="g-go gold wide" type="submit" id="send"><span>LOCK AND PUBLISH</span></button></div></div>
+      <aside class="cd-side"><div class="g-lab">HOW PLAYERS WILL SEE IT</div><div class="cd-preview" id="pv"></div></aside>
     </form>`;
     const v = (id: string) => ($(pane, id) as HTMLInputElement).value;
     const draft = (): NewCampaign => ({ kind, title: v('#ct').trim(), url: kind === 2 ? '' : v('#cu').trim(), machine_id: kind === 2 ? +v('#cm') : 0, goal: kind === 2 ? +v('#cg') : 0,
@@ -1291,10 +1291,10 @@ function commission(root: Root, close: () => void) {
     $(pane, '#steps').addEventListener('click', (e) => { const x = (e.target as HTMLElement).closest<HTMLElement>('[data-x]'); if (!x) return; steps.splice(+x.dataset.x!, 1); drawSteps(Math.min(+x.dataset.x!, steps.length - 1)); check(); });
     $(pane, '#addstep').addEventListener('click', () => { if (steps.length >= DETAIL_LIMITS.steps) return; steps.push(''); drawSteps(steps.length - 1); check(); });
     // the field being typed in lights up its part of the preview
-    pane.addEventListener('focusin', (e) => { const f = (e.target as HTMLElement).closest<HTMLElement>('[data-pv-for]')?.dataset.pvFor ?? ''; pane.dataset.focus = f; hilite(); });
+    pane.addEventListener('focusin', (e) => { const f = (e.target as HTMLElement).closest<HTMLElement>('[data-pv-for]')?.dataset.pvFor ?? ''; const moved = f !== pane.dataset.focus; pane.dataset.focus = f; hilite(moved); });
     pane.addEventListener('focusout', () => { pane.dataset.focus = ''; hilite(); });
-    const hilite = () => { let hit: HTMLElement | null = null; $$(pane, '#pv [data-pv]').forEach(el => { const on = !!pane.dataset.focus && el.dataset.pv === pane.dataset.focus; el.classList.toggle('pv-hl', on); if (on) hit = el; });
-      const body = pane.querySelector<HTMLElement>('#pv .qp-body'); if (hit && body) body.scrollTop = Math.max(0, (hit as HTMLElement).offsetTop - 44); };
+    const hilite = (scroll = false) => { let hit: HTMLElement | null = null; $$(pane, '#pv [data-pv]').forEach(el => { const on = !!pane.dataset.focus && el.dataset.pv === pane.dataset.focus; el.classList.toggle('pv-hl', on); if (on) hit = el; });
+      const body = pane.querySelector<HTMLElement>('#pv .qp-body'); if (scroll && hit && body) body.scrollTop = Math.max(0, (hit as HTMLElement).offsetTop - 44); };
     const check = () => {
       const d = draft(), dt = details(), c = campaignCost(d), min = CAMPAIGN_MIN_BUDGET[kind];
       const problem = campaignProblem(d) ?? (dt.project || dt.description ? detailsProblem(dt) : 'Name your project and describe it.');
@@ -1302,7 +1302,9 @@ function commission(root: Root, close: () => void) {
       $(pane, '#dv').textContent = `${d.days} DAY${d.days === 1 ? '' : 'S'}`; $(pane, '#dc').textContent = `${dt.description.length}/${DETAIL_LIMITS.description}`;
       const row: CampaignRow = { id: 0, kind, creator: owner, title: d.title || 'Your campaign title', url: d.url || 'https://example.com', machineId: d.machine_id, goal: d.goal, rewardChips: d.reward_chips, rewardFaith: d.reward_faith_milli / 1000, maxClaims: d.max_claims, claims: 0, active: true, claimed: false, progress: 0, mine: false,
         project: dt.project || 'your project', description: dt.description || 'Your description appears here.', steps: dt.steps, banner, endsAt: Date.now() / 1000 + d.days! * 86_400 };
-      $(pane, '#pv').innerHTML = `<div class="qb-page cd-page">${campaignPage(row, true)}</div>`; hilite();
+      const pv = $(pane, '#pv'), html = `<div class="qb-page cd-page">${campaignPage(row, true)}</div>`;
+      if (pv.dataset.h !== html) { pv.dataset.h = html; const tpl = document.createElement('template'); tpl.innerHTML = html; const cur = pv.firstElementChild; if (cur) morph(cur, tpl.content.firstElementChild!); else pv.append(tpl.content); }
+      hilite();
       const pct = Math.min(100, (c.budget / min) * 100);
       $(pane, '#fund').innerHTML = `<div class="cd-line"><span>Rewards locked</span><b>${fmt(c.budget)}</b></div><div class="cd-min ${enough ? 'ok' : ''}"><i style="width:${pct}%"></i><small>${enough ? `above the ${fmt(min)} minimum` : `${fmt(min - c.budget)} more to reach the ${fmt(min)} minimum`}</small></div>
         <div class="cd-line"><span>Listing (10% to the Church)</span><b>${fmt(c.listing)}</b></div><div class="cd-line total"><span>YOU PAY</span><b>${fmt(c.total)} chips &middot; ${(c.total / 1000).toFixed(3)} SOL</b></div>
