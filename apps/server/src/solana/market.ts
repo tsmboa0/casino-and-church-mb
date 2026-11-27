@@ -1,4 +1,6 @@
 import { addr, b64decode, buildTx, compileMessage, decodeMarket, ix, MARKET_HEAD, OUTCOMES, REALM, roundsFromLogs, type Ix, type MarketState, type PlayerState, type Rpc, type Signer } from '@cnc/realm';
+/** mirrors MARKET_ROTATE_AT in the program: the save that would take the market off the rollup */
+const MARKET_ROTATE_AT = 9;
 import type { RoundRow, SolStore } from './store.ts';
 
 /**
@@ -9,7 +11,7 @@ import type { RoundRow, SolStore } from './store.ts';
  * If it stops, rounds go on, and every bet still settles when its owner next plays.
  */
 export class MarketKeeper {
-  status = { running: false, at: 0, epoch: 0, enabled: false, lastTickTs: 0, rescued: 0, claimed: 0, checkpoints: 0, rotations: 0, pages: 0, errors: 0, lastError: null as string | null };
+  status = { running: false, at: 0, epoch: 0, enabled: false, lastTickTs: 0, rescued: 0, claimed: 0, checkpoints: 0, rotations: 0, pages: 0, savesPaused: false, errors: 0, lastError: null as string | null };
   head: MarketState | null = null; private full: MarketState | null = null; private timer: NodeJS.Timeout | null = null;
   private seen = 0n; private saving = false; private lastSave = 0; private logged = new Set<number>(); private offAt = 0; private busy = new Set<string>();
   constructor(private l1: Rpc, private er: Rpc, private key: Signer, private store: SolStore, private now = () => Date.now() / 1000) {}
@@ -51,12 +53,14 @@ export class MarketKeeper {
   /** called by the other keeper with every player it reads: whatever the fast path missed */
   async sweep(w: string, p: PlayerState) { if (p.btc.some((s) => this.isOver(s.epoch))) await this.claim(w); }
 
-  /** hourly: the market's saved copy on L1. The ninth save also takes it off the rollup (10 are allowed), and `back` returns it */
+  /** hourly: the market's saved copy on L1, up to the commit cap (see above). `back` returns a market that was taken off the rollup on purpose */
   private async save(m: MarketState) {
+    // the market stays on the rollup: a rotation (commit and undelegate) dropped the crank. The program rotates on the
+    // ninth save, so we stop at the eighth; more need MagicBlock's delegated fee payer (not set up yet)
+    if (m.commits + 1 >= MARKET_ROTATE_AT) { if (!this.status.savesPaused) console.log('[market] saves to L1 paused at the commit cap; the market stays on the rollup'); this.status.savesPaused = true; this.lastSave = this.now(); return; }
     if (this.saving) return; this.saving = true;
     try {
       await this.send(this.er, [ix.marketCheckpoint(this.key.address)]); this.lastSave = this.now(); this.status.checkpoints++;
-      if (m.commits + 1 >= 9) for (let i = 0; i < 30 && !(await this.back()); i++) await new Promise((r) => setTimeout(r, 700));
       await new Promise((r) => setTimeout(r, 12_000)); await this.record();
     } catch (e) { this.fail(e); this.lastSave = this.now() - 3_300; } finally { this.saving = false; }      // try again in five minutes
   }
