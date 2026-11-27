@@ -16,12 +16,12 @@
     "pg": "^8.16.0",
     "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.7.1",
-    "@cnc/realm": "workspace:*"
+    "@cnc/realm": "workspace:*",
+    "tsx": "^4.20.3"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",
     "@types/pg": "^8.15.4",
-    "tsx": "^4.20.3",
     "typescript": "^5.9.3"
   }
 }

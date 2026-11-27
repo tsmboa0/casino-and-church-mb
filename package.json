@@ -11,5 +11,9 @@
     "test": "pnpm test:backend && pnpm test:contract && pnpm typecheck",
     "test:contract": "cd onchain && cargo test -p realm --release",
     "typecheck": "pnpm --filter client exec tsc --noEmit -p . && pnpm --filter server exec tsc --noEmit -p ."
+  },
+  "packageManager": "pnpm@10.12.4",
+  "engines": {
+    "node": ">=22"
   }
 }
