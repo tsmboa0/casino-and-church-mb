@@ -197,8 +197,11 @@ export class SolanaBackend implements Backend {
       const r = await this.er.call('getMultipleAccounts', [[addr.market(), P.btcFeed], { encoding: 'base64', commitment: 'confirmed', dataSlice: { offset: 0, length: MARKET_HEAD } }]);
       const h = r.value[0] && decodeMarket(b64decode(r.value[0].data[0])), f = r.value[1] && decodeFeed(b64decode(r.value[1].data[0])); if (!h) throw new BackendError('MarketClosed', SAY.MarketClosed);
       if (h.open.epoch !== this.mk.ringFor) { const a = await this.er.account(addr.market()), full = a && decodeMarket(a.data); if (full) { this.mk.ring = full.rounds; this.mk.ringFor = full.open.epoch; } }
-      // the tick second is at most one second behind the chain's clock, so the largest difference seen is the closest
-      if (h.lastTickTs) this.mk.skew = Math.max(this.mk.skew === -Infinity ? -Infinity : this.mk.skew - 5, h.lastTickTs * 1000 - Date.now());
+      // the chain's clock, from the freshest second it wrote: the price feed's publish time, the round's opening, the
+      // crank's last tick. A reading far off (a crank that stopped, a stale feed) says nothing about this device's clock
+      const seen = Math.max(f?.at ?? 0, h.open.openTs || 0, h.lastTickTs || 0), guess = seen * 1000 - Date.now();
+      if (seen && Math.abs(guess) < 120_000) this.mk.skew = Math.max(Number.isFinite(this.mk.skew) ? this.mk.skew - 5 : -Infinity, guess);
+      else if (!Number.isFinite(this.mk.skew) || Math.abs(this.mk.skew) >= 120_000) this.mk.skew = 0;
       Object.assign(this.mk, { head: h, cents: f?.cents ?? null, at: Date.now() });
     })().finally(() => { this.mkBusy = null; }));
   }
