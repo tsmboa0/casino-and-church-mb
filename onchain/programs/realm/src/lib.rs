@@ -691,20 +691,24 @@ pub mod realm {
         Ok(())
     }
 
-    /// Saves the market to L1 (the keeper, hourly). An account has 10 saves per delegation, so the ninth also takes it off
-    /// the rollup, to be put straight back: that is only allowed early in a round, when nothing is due for a while.
-    pub fn market_checkpoint(ctx: Context<MarketCheckpoint>) -> Result<()> {
+    /// Saves the market to L1 (the keeper, hourly). The market stays on the rollup. MagicBlock allows 10 free saves per
+    /// delegation; past them the save names the validator's magic fee vault (first extra account) and a delegated fee
+    /// payer that signs (second extra account, optional: the signer pays otherwise).
+    pub fn market_checkpoint<'info>(ctx: Context<'info, MarketCheckpoint<'info>>) -> Result<()> {
         let a = &ctx.accounts;
         require!(a.signer.key() == a.config.keeper || a.signer.key() == a.config.admin, RealmError::NotAllowed);
         let leave = {
             let mut m = a.market.load_mut()?;
             m.commits += 1;
-            let leave = m.commits >= MARKET_ROTATE_AT;
-            require!(!leave || m.enabled == 0 || Clock::get()?.unix_timestamp <= m.open.open_ts + 12, RealmError::TooEarly);
-            leave
+            // the market stays on the rollup (taking it off and back dropped the crank): saves past MagicBlock's free
+            // ten are paid by the keeper's delegated fee payer. Only the admin, with the market stopped, takes it off.
+            a.signer.key() == a.config.admin && m.enabled == 0
         };
         let market = [a.market.to_account_info()];
-        let intent = MagicIntentBundleBuilder::new(a.signer.to_account_info(), a.magic_context.to_account_info(), a.magic_program.to_account_info());
+        let extra = ctx.remaining_accounts;
+        let payer = match extra.get(1) { Some(p) => { require!(p.is_signer && p.is_writable, RealmError::NotAllowed); p.clone() } None => a.signer.to_account_info() };
+        let mut intent = MagicIntentBundleBuilder::new(payer, a.magic_context.to_account_info(), a.magic_program.to_account_info());
+        if let Some(vault) = extra.first() { intent = intent.magic_fee_vault(vault.clone()); }
         if leave { intent.commit_and_undelegate(&market).build_and_invoke()?; } else { intent.commit(&market).build_and_invoke()?; }
         Ok(())
     }
@@ -1593,7 +1597,8 @@ pub struct MarketClaim<'info> {
 #[commit]
 #[derive(Accounts)]
 pub struct MarketCheckpoint<'info> {
-    #[account(mut)]
+    /// the keeper or the admin; it pays for the save only when no delegated fee payer is passed (then it is the
+    /// transaction's fee payer, writable as such)
     pub signer: Signer<'info>,
     #[account(seeds = [SEED_CONFIG], bump = config.bump)]
     pub config: Box<Account<'info, Config>>,

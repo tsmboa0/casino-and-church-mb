@@ -31,7 +31,6 @@ pub const EPHEMERAL_VAULT: Pubkey = pubkey!("MagicVau1t9999999999999999999999999
 pub const MAGIC_PROGRAM: Pubkey = pubkey!("Magic11111111111111111111111111111111111111");
 pub const PRICE_PROGRAM: Pubkey = pubkey!("PriCems5tHihc6UDXDjzjeawomAwBduWMGAi8ZUjppd");
 pub const INSTRUCTIONS_SYSVAR: Pubkey = pubkey!("Sysvar1nstructions1111111111111111111111111");
-pub const MARKET_ROTATE_AT: u32 = 9;
 
 /// LUCK per chip by game, as a percentage of `luck_per_chip_milli`. The Wheel is paid for by the house edge, so a game
 /// with a small edge earns LUCK slowly: slots, coin, dice, roulette, wheel, harmony, blackjack, market

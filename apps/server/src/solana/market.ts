@@ -1,6 +1,9 @@
-import { addr, b64decode, buildTx, compileMessage, decodeMarket, ix, MARKET_HEAD, OUTCOMES, REALM, roundsFromLogs, type Ix, type MarketState, type PlayerState, type Rpc, type Signer } from '@cnc/realm';
-/** mirrors MARKET_ROTATE_AT in the program: the save that would take the market off the rollup */
-const MARKET_ROTATE_AT = 9;
+import { addr, b58decode, b64decode, buildTx, compileMessage, decodeMarket, ix, MARKET_HEAD, OUTCOMES, P, pda, REALM, roundsFromLogs, type Ix, type MarketState, type PlayerState, type Rpc, type Signer } from '@cnc/realm';
+/** MagicBlock's free saves to L1 per delegation; past them a delegated fee payer pays (see `save`) */
+const FREE_SAVES = 10;
+/** our rollup's validator (EU devnet), and its magic fee vault, which paid saves name */
+const VALIDATOR = process.env.ER_VALIDATOR ?? 'MEUGGrYPxKk17hCr7wpT6s8dtNokZj5U2L57vjYMS8e';
+export const FEE_VAULT = pda(['magic-fee-vault', b58decode(VALIDATOR)], P.delegation);
 import type { RoundRow, SolStore } from './store.ts';
 
 /**
@@ -11,10 +14,11 @@ import type { RoundRow, SolStore } from './store.ts';
  * If it stops, rounds go on, and every bet still settles when its owner next plays.
  */
 export class MarketKeeper {
-  status = { running: false, at: 0, epoch: 0, enabled: false, lastTickTs: 0, rescued: 0, claimed: 0, checkpoints: 0, rotations: 0, pages: 0, savesPaused: false, errors: 0, lastError: null as string | null };
+  status = { running: false, at: 0, epoch: 0, enabled: false, lastTickTs: 0, rescued: 0, claimed: 0, checkpoints: 0, rotations: 0, pages: 0, savesPaused: false, feePayerSol: null as number | null, errors: 0, lastError: null as string | null };
   head: MarketState | null = null; private full: MarketState | null = null; private timer: NodeJS.Timeout | null = null;
-  private seen = 0n; private saving = false; private lastSave = 0; private logged = new Set<number>(); private offAt = 0; private busy = new Set<string>();
-  constructor(private l1: Rpc, private er: Rpc, private key: Signer, private store: SolStore, private now = () => Date.now() / 1000) {}
+  private seen = 0n; private saving = false; private lastSave = 0; private logged = new Set<number>(); private offAt = 0; private busy = new Set<string>(); private feeReadAt = 0;
+  /** `feePayer`: a wallet delegated to the rollup that pays for saves past the free ten (scripts/solana/feepayer.ts) */
+  constructor(private l1: Rpc, private er: Rpc, private key: Signer, private store: SolStore, private now = () => Date.now() / 1000, private feePayer: Signer | null = null) {}
   start() { this.status.running = true; const go = async () => { await this.tick(); if (this.status.running) this.timer = setTimeout(go, 2_000); }; this.timer = setTimeout(go, 1_000); }
   stop() { this.status.running = false; if (this.timer) clearTimeout(this.timer); }
   private fail = (e: unknown) => { this.status.errors++; this.status.lastError = String((e as Error)?.message ?? e).slice(0, 160); };
@@ -24,6 +28,7 @@ export class MarketKeeper {
     try {
       const m = await this.readHead(); if (!m) return; this.head = m; const now = this.now();
       Object.assign(this.status, { epoch: Number(m.open.epoch), enabled: m.enabled, lastTickTs: m.lastTickTs });
+      if (this.feePayer && (!this.feeReadAt || Date.now() - this.feeReadAt > 60_000)) { this.feeReadAt = Date.now(); void this.er.account(this.feePayer.address).then((f) => { this.status.feePayerSol = f ? Number(f.lamports) / 1e9 : 0; }).catch(() => {}); }
       // the crank closes a round on the second; when it has stopped (see crankStale) the backup steps in at once
       const crankStale = !m.lastTickTs || now - m.lastTickTs > 120;
       if (m.enabled && now > m.open.lockTs + (crankStale ? 1 : 4)) { await this.send(this.er, [ix.marketTick(this.key.address)]).then(() => { this.status.rescued++; }, (e) => { if (e.code !== 'NotAllowed') throw e; }); }
@@ -55,12 +60,19 @@ export class MarketKeeper {
 
   /** hourly: the market's saved copy on L1, up to the commit cap (see above). `back` returns a market that was taken off the rollup on purpose */
   private async save(m: MarketState) {
-    // the market stays on the rollup: a rotation (commit and undelegate) dropped the crank. The program rotates on the
-    // ninth save, so we stop at the eighth; more need MagicBlock's delegated fee payer (not set up yet)
-    if (m.commits + 1 >= MARKET_ROTATE_AT) { if (!this.status.savesPaused) console.log('[market] saves to L1 paused at the commit cap; the market stays on the rollup'); this.status.savesPaused = true; this.lastSave = this.now(); return; }
+    // the market stays on the rollup for good (a rotation once dropped the crank). Past the free saves, the delegated
+    // fee payer pays; without one, saving stops there
+    const paid = m.commits >= FREE_SAVES - 1;
+    if (paid && !this.feePayer) { if (!this.status.savesPaused) console.log('[market] saves to L1 paused: no delegated fee payer (FEEPAYER_KEY)'); this.status.savesPaused = true; this.lastSave = this.now(); return; }
+    this.status.savesPaused = false;
     if (this.saving) return; this.saving = true;
     try {
-      await this.send(this.er, [ix.marketCheckpoint(this.key.address)]); this.lastSave = this.now(); this.status.checkpoints++;
+      if (this.feePayer) {
+        // the fee payer signs and pays; the keeper only authorises (read-only), and the save names the fee vault
+        const x = ix.marketCheckpoint(this.key.address), save: Ix = { ...x, accounts: [...x.accounts.map((a) => (a.address === this.key.address ? { ...a, writable: false } : a)), { address: FEE_VAULT, signer: false, writable: true }, { address: this.feePayer.address, signer: true, writable: true }] };
+        await this.er.send(buildTx(compileMessage(this.feePayer.address, [save], await this.er.blockhash()), [this.feePayer, this.key]));
+      } else await this.send(this.er, [ix.marketCheckpoint(this.key.address)]);
+      this.lastSave = this.now(); this.status.checkpoints++;
       await new Promise((r) => setTimeout(r, 12_000)); await this.record();
     } catch (e) { this.fail(e); this.lastSave = this.now() - 3_300; } finally { this.saving = false; }      // try again in five minutes
   }
