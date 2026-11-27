@@ -24,7 +24,7 @@ The step-by-step testing guide (deep links, the `window.cnc` page API, every pla
 | Area | Shipped and live on devnet |
 |---|---|
 | **Games** | Slots ×2, Coin Flip, Dice, Roulette, Blackjack (per-card VRF), Wheel of Fortune, Harmony Wheel |
-| **BTC market** | One-minute UP/DOWN rounds priced by the program from Pyth Lazer, clocked by a crank, voided and refunded when no fresh price arrives; every round recorded on L1 |
+| **BTC market** | One-minute UP/DOWN rounds priced by the program from Pyth Lazer, clocked by a crank, voided and refunded when no fresh price arrives; every round linked to the rollup transaction that settled it |
 | **Fairness** | MagicBlock VRF for every outcome, the player's seed mixed in, verified in the browser |
 | **AI hosts** | Don Fortuna and Father Nakamoto on NEAR AI Cloud (TEE): signed decisions, hashed onto Solana before they act, bounded by the program |
 | **Church economy** | Tithes, candles, altar, confession, alms, Vigils, blessings paid by the treasury |
@@ -48,7 +48,7 @@ Program files are in `onchain/programs/realm/src/`. Server files are in `apps/se
 | VERIFY THIS BET recomputes an outcome in the browser | `apps/client/src/solana/verify.ts` |
 | The BTC price comes from Pyth Lazer, at most 5 seconds old | `read_feed`, `MAX_PRICE_AGE_S` in `market.rs` |
 | A round with no fresh price in time is voided and refunded | `Tick::Voided` in `market.rs` |
-| Rounds are recorded on L1, one page per hour | `log_rounds` in `lib.rs`; `MarketKeeper` in `market.ts` |
+| Round pages written to L1 hourly, within the market's 10 free saves per delegation (paused after that until the fee payer is set up) | `log_rounds` in `lib.rs`; `MarketKeeper` in `market.ts` |
 | Campaign minimums: social 500, project 1,000, machine 200 chips; 1 to 30 days | `MIN_BUDGET`, `MAX_DAYS` in `campaigns.rs`; `CAMPAIGN_MIN_BUDGET` in `packages/shared/src/campaigns.ts` |
 | The program refuses a campaign or claim the oracle didn't co-sign | `create_campaign`, `claim_campaign` in `lib.rs`; moderation in `app.ts` (`/campaigns/approve`) |
 | Ended campaigns refund what wasn't won | `expire_campaign` in `lib.rs`; `campaigns()` in `keeper.ts` |
@@ -67,7 +67,7 @@ Program files are in `onchain/programs/realm/src/`. Server files are in `apps/se
 2. **Every panel, no account:** open `https://casino-and-church-mb.vercel.app/?demo=1&agent=1` and use `cnc.places()` and `cnc.go(id)` (see [`AGENTS.md`](AGENTS.md)). The demo runs the same rules in the browser.
 3. **The real chain:** open `https://casino-and-church-mb.vercel.app/?agent=1` and sign in with Privy. Then **Cashier → GET FREE TEST SOL → BUY CHIPS**, and play. Each result card has **VIEW ON EXPLORER** (the rollup transaction) and **VERIFY THIS BET**.
 4. **The AI hosts:** `GET /agent/feed?limit=5`, then `GET /agent/decision/<id>/proof`. The response has the model's signature, the attestation, and `anchorTx`, the decision's hash on Solana.
-5. **BTC rounds:** `GET /market/rounds?limit=5`. In the game, **BTC Exchange → PAST ROUNDS** links each round to its L1 record.
+5. **BTC rounds:** `GET /market/rounds?limit=5`. In the game, **BTC Exchange → PAST ROUNDS** links each round to the rollup transaction that settled it (and to its L1 page where one was written).
 6. **From a clone:** `pnpm install && pnpm test` (55 program tests, 42 server tests, 1,005 vectors, both typechecks). Devnet checks: `scripts/solana/e2e.ts` (35 checks) and `scripts/solana/load.ts` (30 players); both need funded devnet keys.
 
 **Limits, honestly:** devnet only; no outside audit of the program yet; the game depends on the MagicBlock rollup being up (if it stops, bets wait, and late BTC rounds are refunded).
