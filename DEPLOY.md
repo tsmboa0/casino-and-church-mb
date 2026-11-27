@@ -55,7 +55,8 @@ railway up --service server --detach
 
 # client
 cd apps/client && VITE_API_URL=https://server-production-41bf466c.up.railway.app npx vite build --outDir ../../spike/target/site --emptyOutDir
-cd ../../spike/target/site && npx vercel deploy --prod --yes
+# the build empties the folder: put vercel.json and .vercelignore back, then
+cd ../../spike/target/site && npx vercel link --yes --project casino-and-church-mb && npx vercel deploy --prod --yes
 ```
 
 The site folder also holds a `vercel.json` (security headers) and a `.vercelignore` (`.env.local`, `.vercel`).
