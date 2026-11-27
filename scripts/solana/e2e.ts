@@ -13,12 +13,12 @@ if (await l1.balance(sponsor.address) < 400_000_000n) await fund(sponsor, 0.5);
 
 // ---- a player whose wallet never holds any SOL
 const a = await open(); check('setup in one transaction', a.bytes <= 1232, { bytes: a.bytes, ms: a.t, onRollupMs: a.seen, sponsorLamports: a.cost });
-await send(er, [ix.claimWelcome(a.w.address, a.s.address)], [a.s]); check('welcome chips with the session key', (await P(a.w.address)).chips === 30n * CHIP);
+await send(er, [ix.claimWelcome(a.w.address, a.s.address)], [a.s]); check('welcome: 30 bonus chips with the session key', (await P(a.w.address)).bonus === 30n * CHIP && (await P(a.w.address)).chips === 0n);
 await refused('welcome twice', () => send(er, [ix.claimWelcome(a.w.address, a.s.address)], [a.s]), 'AlreadyClaimed');
 await send(er, [ix.setProfile(a.w.address, a.s.address, 'Magpie 77', 'm_jester')], [a.s]); await send(er, [ix.enterRealm(a.w.address, a.s.address, 1)], [a.s]); const pa = await P(a.w.address); check('profile and realm', pa.name === 'Magpie 77' && pa.avatar === 'm_jester' && pa.realm === 1);
 await refused('realm change too soon', () => send(er, [ix.enterRealm(a.w.address, a.s.address, 2)], [a.s]), 'Cooldown');
 check('wallet holds no SOL', await l1.balance(a.w.address) === 0n);
-try { await send(er, [ix.cashOut(a.w.address, 10)], [a.w]); const [, t] = await ms(() => until(async () => (await Pu(a.w.address)).paidOut === 10n * CHIP, 45_000, 500)); check('a wallet with 0 SOL cashes out', await l1.balance(a.w.address) === 10n * CHIP, { ms: t }); } catch (e: any) { check('a wallet with 0 SOL cashes out', false, e.message); }
+await refused('bonus chips cannot be cashed out', () => send(er, [ix.cashOut(a.w.address, 10)], [a.w]), 'NoChips');
 
 // ---- a player with money
 const b = await open(); await fund(b.w, 0.4); const buy = (n: number) => send(l1, [ix.buyChips(b.w.address, BigInt(n) * CHIP)], [b.w]);
