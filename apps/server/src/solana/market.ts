@@ -22,7 +22,9 @@ export class MarketKeeper {
     try {
       const m = await this.readHead(); if (!m) return; this.head = m; const now = this.now();
       Object.assign(this.status, { epoch: Number(m.open.epoch), enabled: m.enabled, lastTickTs: m.lastTickTs });
-      if (m.enabled && now > m.open.lockTs + 4) { await this.send(this.er, [ix.marketTick(this.key.address)]).then(() => { this.status.rescued++; }, (e) => { if (e.code !== 'NotAllowed') throw e; }); }
+      // the crank closes a round on the second; when it has stopped (see crankStale) the backup steps in at once
+      const crankStale = !m.lastTickTs || now - m.lastTickTs > 120;
+      if (m.enabled && now > m.open.lockTs + (crankStale ? 1 : 4)) { await this.send(this.er, [ix.marketTick(this.key.address)]).then(() => { this.status.rescued++; }, (e) => { if (e.code !== 'NotAllowed') throw e; }); }
       if (this.seen && m.open.epoch !== this.seen) await this.closed(m);
       if (!this.seen) await this.closed(m);
       this.seen = m.open.epoch;
