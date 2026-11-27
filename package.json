@@ -10,7 +10,8 @@
     "test:backend": "pnpm --filter @cnc/shared test && pnpm --filter @cnc/realm test && pnpm --filter server test && pnpm --filter @cnc/sim vectors && pnpm --filter @cnc/sim sim",
     "test": "pnpm test:backend && pnpm test:contract && pnpm typecheck",
     "test:contract": "cd onchain && cargo test -p realm --release",
-    "typecheck": "pnpm --filter client exec tsc --noEmit -p . && pnpm --filter server exec tsc --noEmit -p ."
+    "typecheck": "pnpm --filter client exec tsc --noEmit -p . && pnpm --filter server exec tsc --noEmit -p .",
+    "start": "pnpm --filter server start"
   },
   "packageManager": "pnpm@10.12.4",
   "engines": {

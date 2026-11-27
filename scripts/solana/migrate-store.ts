@@ -21,7 +21,7 @@ await each('decisions', j.decisions, (d: any) => db.addDecision(d));
 await each('details', j.details, (d: any) => db.addDetails(d));
 for (const f of fs.existsSync(path.join(path.dirname(file), 'banners')) ? fs.readdirSync(path.join(path.dirname(file), 'banners')) : []) { /* banners from tests stay behind: their campaigns are hidden below */ void f; }
 // the board: only the Church's own campaigns stay visible
-const admin = key('admin').address; let hidden = 0;
+const admin = process.env.ADMIN_ADDRESS ?? key('admin').address; let hidden = 0;
 for (const b of [0, 1]) for (const c of decodeBoard((await er.account(addr.board(b)))!.data) ?? []) {
   if (c.creator === admin) continue;
   const have = (await db.details([c.id]))[0];
