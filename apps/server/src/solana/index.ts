@@ -1,6 +1,8 @@
 import { Rpc } from '@cnc/realm'; import { buildApp } from './app.ts'; import { config } from './config.ts'; import { Indexer } from './indexer.ts'; import { Keeper } from './keeper.ts'; import { MarketKeeper } from './market.ts'; import { Hosts } from './hosts/service.ts'; import { Sponsor } from './sponsor.ts'; import { FileStore, PgStore } from './store.ts';
 const l1 = new Rpc(config.l1, 'l1'), er = new Rpc(config.er, 'er');
 const store = config.databaseUrl ? await PgStore.open(config.databaseUrl) : new FileStore(new URL('../../.data/store.json', import.meta.url).pathname);
+// launch: copy the development store in once, while the database has no players
+if (process.env.SEED_STORE && config.databaseUrl && process.env.ADMIN_ADDRESS && (await store.count()) === 0) { const { migrate } = await import('./migrate.ts'); console.log(JSON.stringify({ at: 'seeded', ...(await migrate(store, new URL(`../../../../${process.env.SEED_STORE}`, import.meta.url).pathname, process.env.ADMIN_ADDRESS, er)) })); }
 const sponsor = config.sponsor ? new Sponsor(l1, config.sponsor) : null;
 const market = config.keeper ? new MarketKeeper(l1, er, config.keeper, store) : null; if (process.env.MARKET_KEEPER !== '0') market?.start();
 const keeper = config.keeper && config.sponsor ? new Keeper(l1, er, config.keeper, config.sponsor, () => store.wallets(), 20_000, market) : null; keeper?.start();
