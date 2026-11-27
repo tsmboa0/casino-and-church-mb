@@ -105,7 +105,7 @@ A bet settles on the rollup in about a second. Every outcome comes from MagicBlo
 - Every result card links to its rollup transaction in the Solana Explorer.
 - **VERIFY THIS BET** recomputes the outcome from the VRF output in the browser.
 - AI host decisions: `GET /agent/feed`, then `GET /agent/decision/<id>/proof` for the signed model output and `anchorTx`, its hash on Solana.
-- BTC rounds: `GET /market/rounds`; each links its settling transaction on the rollup, and older rounds also an hourly page on L1 (`log_rounds`).
+- BTC rounds: `GET /market/rounds`; each links its settling transaction on the rollup and its hourly page on L1 (`log_rounds`).
 - Server health: `GET /healthz` (`alerts` lists anything wrong).
 
 ## 6. Run it from a clone

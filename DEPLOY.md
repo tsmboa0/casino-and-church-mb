@@ -25,7 +25,7 @@ Local keys live in `~/.config/casino-mb/devnet/` (never in git): `admin` (progra
 as the market's keeper), `oracle` (the Church oracle's co-signature), `fortuna` and `nakamoto` (the AI hosts).
 
 On Railway, each is a variable holding the key as a JSON array: `SPONSOR_KEY`, `KEEPER_KEY`, `ORACLE_KEY`,
-`FORTUNA_KEY`, `NAKAMOTO_KEY`. Set them from the files so they never pass through a terminal or a chat:
+`FORTUNA_KEY`, `NAKAMOTO_KEY`, and `FEEPAYER_KEY`: the market's delegated fee payer, a wallet delegated to the rollup that pays for saves past MagicBlock's free ten (`scripts/solana/feepayer.ts up` sets it up and tops it up; `/healthz` alerts below 0.05 SOL). Set them from the files so they never pass through a terminal or a chat:
 
 ```bash
 K=~/.config/casino-mb/devnet

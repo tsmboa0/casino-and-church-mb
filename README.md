@@ -109,7 +109,7 @@ A one-minute **UP/DOWN market on Bitcoin**, run entirely by the program:
 - Call **UP** or **DOWN** with 1, 2, 5 or 10 chips. A right call pays **1.9×**, a tie returns your bet.
 - One price both **closes** the live round and **locks** the next. The program reads it from the **Pyth Lazer** BTC/USD feed on the rollup and refuses a price more than 5 seconds old.
 - A **MagicBlock crank** runs the clock every minute; the server's keeper is only a backup. If no fresh price arrives in time, the round is **voided and every bet refunded**.
-- Every finished round is kept, with the rollup transaction that settled it: **PAST ROUNDS** links each one. Pages of round records are also written to Solana L1 each hour, while the market's free saves to L1 last (see [Limits](#limits-honestly)).
+- Every finished round is kept: **PAST ROUNDS** links the rollup transaction that settled it, and every hour the market is saved to Solana with a page of round records. The market never leaves the rollup: saves past MagicBlock's free ten are paid by a **delegated fee payer**.
 
 ---
 
@@ -164,7 +164,7 @@ A casino where every bet waits 10 seconds for a block, and every action asks for
 | **Session keys** | One signature at sign-up creates a session key; after that, no popups |
 | **VRF** | Every random outcome, requested and verified inside the program |
 | **Crank** | The BTC market's clock, scheduled on the rollup |
-| **Commits** | The house and market are saved back to Solana; cash-outs commit and pay on L1 |
+| **Commits** | The house and market are saved back to Solana (the market's saves paid by a delegated fee payer, so it never leaves the rollup); cash-outs commit and pay on L1 |
 
 **Measured on devnet:** 30 players placing 450 bets at once settled in **1.4 s** (median) and **3.5 s** (95th percentile), with no errors and the books balanced (`scripts/solana/load.ts`).
 
@@ -277,7 +277,6 @@ Fastest start: `https://casino-and-church-mb.vercel.app/?demo=1&agent=1&play=mar
 
 - **Devnet only.** Chips have no monetary value.
 - **No independent audit yet.** The program has 55 tests, property tests over random histories and a security pass of our own; an outside review comes before any real money.
-- **Hourly round pages on L1 pause.** The market stays on the rollup for good (moving it off and back once dropped the crank), and a delegated account gets 10 free saves to L1; more need MagicBlock's delegated fee payer, which is next on our list. Every round's rollup transaction stays linked meanwhile.
 - **The rollup is a dependency.** If it stops answering, bets wait; BTC rounds without a price in time are voided and refunded.
 
 ## Credits
